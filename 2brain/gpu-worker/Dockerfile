@@ -22,15 +22,31 @@ RUN if [ "$DEVICE" = "cuda" ]; then \
 
 COPY worker.py .
 
-# Предзагрузка моделей в образ (сборка дольше, старт мгновенный)
+# Предзагрузка моделей в образ (сборка дольше, старт мгновенный):
+# faster-whisper large-v3 + живая конвертация мини-PDF (тянет модели docling
+# в HF-кэш ровно в том виде, в котором их ищет пайплайн)
 ENV HF_HOME=/models/hf \
-    DOCLING_ARTIFACTS_PATH=/models/docling \
     LD_LIBRARY_PATH=/usr/local/lib/python3.11/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib
 RUN python - <<'EOF'
-import faster_whisper, subprocess, sys
+import faster_whisper
 faster_whisper.WhisperModel("large-v3", device="cpu", compute_type="int8")
-subprocess.run([sys.executable, "-m", "docling.utils.model_downloader", "download_models"],
-               check=True)
+
+from pathlib import Path
+pdf = b"""%PDF-1.4
+1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj
+2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj
+3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 100]>>endobj
+trailer<</Root 1 0 R>>"""
+Path("/tmp/preload.pdf").write_bytes(pdf)
+
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.document_converter import DocumentConverter, PdfFormatOption
+opts = PdfPipelineOptions()
+opts.do_ocr = True
+conv = DocumentConverter(format_options={
+    InputFormat.PDF: PdfFormatOption(pipeline_options=opts)})
+conv.convert("/tmp/preload.pdf")
 EOF
 
 ENTRYPOINT ["python3", "worker.py"]

@@ -28,6 +28,11 @@ WHISPER_MODEL = "/opt/whisper.cpp/models/ggml-small.bin"
 DOCLING_IMAGE = "docling:cpu"
 DOCLING_CACHE = Path("/opt/2brain/model_cache")
 
+# Сеть: DNS роутера блокирует YouTube (NXDOMAIN), поэтому внешние запросы
+# yt-dlp/trafilatura идут через socks-прокси sing-box — он резолвит имена на выезде
+PROXY_URL = "http://192.168.2.9:1080"
+NO_PROXY = "localhost,127.0.0.1,192.168.0.0/16"
+
 # --- Режимы ---
 NIGHT_START = 1   # ночное окно тяжёлых локальных задач: [01:00, 06:00)
 NIGHT_END = 6

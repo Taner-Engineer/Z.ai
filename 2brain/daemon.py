@@ -17,6 +17,7 @@ AI-вызовов нет: «Суть» пишется подписочным ZCo
 import datetime
 import fcntl
 import json
+import os
 import re
 import subprocess
 import sys
@@ -41,6 +42,8 @@ def log(msg: str):
 
 
 def is_night() -> bool:
+    if os.environ.get("NIGHT_FORCE"):  # для приёмки/диагностики: имитация окна
+        return True
     return config.NIGHT_START <= datetime.datetime.now().hour < config.NIGHT_END
 
 
@@ -182,9 +185,13 @@ def _handle_pdf(p: Path, title_hint: str, source_url: str) -> None:
 
 def _finish_free_file(res: processors.Result, p: Path) -> None:
     """Файловый вход обработан: заметка + потребление исходника."""
+    lead = ""
+    if res.attach:
+        lead = f"Полный текст: [[{res.attach[:-3]}]]"
     note = vault.create_note(title=res.title or p.stem, ntype=res.ntype or "doc",
                              scope=res.scope or "global", source_url=res.source_url,
-                             captured=res.captured, raw=res.raw, tags=res.tags)
+                             captured=res.captured, raw=res.raw, tags=res.tags,
+                             body_lead=lead)
     if not res.ok:
         vault.set_status(note, "queued")  # сырьё не готово — ZCode пропустит пустые
         log(f"ОШИБКА {p.name}: {res.error}")
@@ -452,6 +459,10 @@ def once() -> None:
     (STATE / "tmp").mkdir(parents=True, exist_ok=True)
     config.DROP.mkdir(parents=True, exist_ok=True)
     config.GPU_CARDS.mkdir(parents=True, exist_ok=True)
+    # DNS роутера блокирует YouTube: внешние запросы через socks-прокси sing-box
+    os.environ.setdefault("HTTP_PROXY", config.PROXY_URL)
+    os.environ.setdefault("HTTPS_PROXY", config.PROXY_URL)
+    os.environ.setdefault("NO_PROXY", config.NO_PROXY)
 
     files = stable_files()
     consume_url_lists(files)

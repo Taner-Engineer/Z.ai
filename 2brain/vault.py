@@ -150,10 +150,14 @@ def render_stub(title: str, ntype: str, scope: str, source_url: str,
 
 
 def create_note(title: str, ntype: str, scope: str, source_url: str,
-                captured: str, raw: str, tags: list[str]) -> Path:
+                captured: str, raw: str, tags: list[str],
+                body_lead: str = "") -> Path:
     p = note_path(title, scope)
-    p.write_text(render_stub(title, ntype, scope, source_url, captured, raw, tags),
-                 encoding="utf-8")
+    text = render_stub(title, ntype, scope, source_url, captured, raw, tags)
+    if body_lead:
+        # ссылка на полный текст (doc) или вложение — перед разделом Суть
+        text = text.replace("## Суть\n", f"{body_lead}\n\n## Суть\n", 1)
+    p.write_text(text, encoding="utf-8")
     return p
 
 
