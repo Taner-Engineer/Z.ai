@@ -107,9 +107,11 @@ class Watchlist:
 
 
 def note_path(title: str, scope: str) -> Path:
-    """Путь заметки по доктрине: Knowledge/ или Projects/<имя>/; коллизии — суффикс."""
+    """Путь заметки по доктрине: Knowledge/, Books/ или Projects/<имя>/; коллизии — суффикс."""
     if scope.startswith("project/"):
         d = config.PROJECTS / scope.split("/", 1)[1]
+    elif scope == "books":
+        d = config.BOOKS
     else:
         d = config.KNOWLEDGE
         scope = "global"

@@ -23,8 +23,6 @@ RUN if [ "$DEVICE" = "cuda" ]; then \
     fi \
     && pip install --no-cache-dir -r requirements.txt
 
-COPY worker.py .
-
 # Предзагрузка моделей в образ (сборка дольше, старт мгновенный):
 # faster-whisper large-v3 + живая конвертация мини-PDF (тянет модели docling
 # в HF-кэш ровно в том виде, в котором их ищет пайплайн)
@@ -51,5 +49,8 @@ conv = DocumentConverter(format_options={
     InputFormat.PDF: PdfFormatOption(pipeline_options=opts)})
 conv.convert("/tmp/preload.pdf")
 EOF
+
+# worker.py копируется ПОСЛЕДНИМ: правки воркера не инвалидируют тяжёлый слой с моделями
+COPY worker.py .
 
 ENTRYPOINT ["python3", "worker.py"]

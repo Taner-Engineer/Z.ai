@@ -41,7 +41,15 @@ def run_stt(job_dir: Path, m: dict) -> str:
 
     import faster_whisper
     device = "cuda" if has_cuda() else "cpu"
-    compute = "float16" if device == "cuda" else "int8"
+    compute = "int8"
+    if device == "cuda":
+        compute = "float16"
+        try:  # ноутбучные карты с малым VRAM (RTX 3050 = 4 ГБ): large-v3 влезает только в int8
+            import torch
+            if torch.cuda.get_device_properties(0).total_memory < 7_000_000_000:
+                compute = "int8"
+        except Exception:
+            pass
     print(f"[{m['id']}] STT large-v3 device={device} compute={compute}", flush=True)
     model = faster_whisper.WhisperModel("large-v3", device=device, compute_type=compute)
     segments, _info = model.transcribe(str(wav), language=None, vad_filter=True)

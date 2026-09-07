@@ -10,6 +10,7 @@ RAW = VAULT / "_raw"
 ATTACH = VAULT / "_Attachments"
 KNOWLEDGE = VAULT / "Knowledge"
 PROJECTS = VAULT / "Projects"
+BOOKS = VAULT / "Books"          # каталог книг: заметки type: doc, полный текст во вложениях
 
 # --- Точка приёма ---
 DROP = VAULT / "_Drop"
@@ -41,7 +42,8 @@ HEAVY_MIN_RAM_MB = 3000   # свободно меньше — тяжёлое о�
 # --- Пороги маршрутизации ---
 PDF_CHARS_PER_PAGE = 150   # меньше в среднем — считается сканом
 PDF_GPU_PAGES = 50         # скан длиннее — в GPU-очередь
-VIDEO_LOCAL_MAX_SEC = 300  # видеофайл длиннее — в GPU-очередь
+VIDEO_LOCAL_MAX_SEC = 0    # 0 = локально НЕ расшифровываем вообще: любое STT — в GPU-очередь
+                            # (рабочий ноут RTX 3050 или vast.ai; CPU homelab не тратим)
 STABLE_SCANS = 2           # размер файла неизменен N сканов подряд — файл готов
 MAX_ATTEMPTS = 3           # попыток на элемент, дальше — failed в отчёт
 

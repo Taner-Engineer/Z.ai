@@ -58,13 +58,19 @@ def ram_available_mb() -> int:
 # ---------- стабильность файлов в _Drop ----------
 
 def stable_files() -> list[Path]:
-    """Файлы корня _Drop, размер которых не менялся STABLE_SCANS прогонов подряд."""
+    """Файлы _Drop (корень + подкаталоги маршрутизации Books/, Projects/<имя>/),
+    размер которых не менялся STABLE_SCANS прогонов подряд. Служебные _-папки
+    и файлы списков-ссылок вне корня не сканируются."""
     sizes_f = STATE / "sizes.json"
     sizes = json.loads(sizes_f.read_text()) if sizes_f.exists() else {}
     cur: dict[str, list] = {}
     ready: list[Path] = []
     if config.DROP.exists():
-        for p in sorted(config.DROP.iterdir()):
+        candidates = list(config.DROP.iterdir())
+        for d in candidates:
+            if d.is_dir() and not d.name.startswith("_") and not d.name.startswith("."):
+                candidates.extend(d.iterdir())  # один уровень: Books/, Projects/<имя>/
+        for p in sorted(candidates):
             if not p.is_file() or p.name.startswith("."):
                 continue
             size = p.stat().st_size
@@ -76,6 +82,20 @@ def stable_files() -> list[Path]:
     sizes_f.parent.mkdir(parents=True, exist_ok=True)
     sizes_f.write_text(json.dumps(cur))
     return ready
+
+
+def drop_scope(p: Path) -> str:
+    """Подкаталог _Drop задаёт маршрут: Books/ -> книги, Projects/<имя>/ -> проект."""
+    try:
+        rel = p.parent.relative_to(config.DROP)
+    except ValueError:
+        return "global"
+    parts = rel.parts
+    if parts[:1] == ("Books",):
+        return "books"
+    if len(parts) >= 2 and parts[0] == "Projects":
+        return f"project/{parts[1]}"
+    return "global"
 
 
 # ---------- попытки (защита от вечных ретраев) ----------
@@ -98,6 +118,8 @@ def consume_url_lists(files: list[Path]) -> None:
     inbox = vault.Inbox()
     for f in files:
         if f.suffix.lower() not in router.LIST_EXT:
+            continue
+        if f.parent != config.DROP:  # списки-ссылки живут только в корне _Drop
             continue
         text = f.read_text(encoding="utf-8", errors="replace")
         lines = [ln.strip() for ln in text.splitlines()
@@ -123,23 +145,21 @@ def consume_url_lists(files: list[Path]) -> None:
 
 def handle_drop_file(p: Path) -> None:
     ext = p.suffix.lower()
+    scope = drop_scope(p)
     if ext in router.VIDEO_EXT:
         info = router.video_info(p)
         res = processors.Result()
-        res.title, res.ntype = p.stem, ("reel" if info["vertical"] else "video")
-        if info["duration"] > config.VIDEO_LOCAL_MAX_SEC:
-            note = vault.create_note(title=res.title, ntype=res.ntype, scope="global",
-                                     source_url="", captured=vault.today(), raw="", tags=[])
-            vault.set_status(note, "queued-gpu")
-            gpu_queue.enqueue("stt", res.title, info["duration"] / 60, note, src=p)
-            log(f"GPU-очередь (STT {info['duration']/60:.0f} мин): {p.name}")
-            STATS["done"] += 1
-            return
-        res = processors.do_video_local(p, info)
-        _finish_free_file(res, p)
+        res.title, res.ntype, res.scope = p.stem, ("reel" if info["vertical"] else "video"), scope
+        # локально не расшифровываем: любое STT — в GPU-очередь
+        note = vault.create_note(title=res.title, ntype=res.ntype, scope=scope,
+                                 source_url="", captured=vault.today(), raw="", tags=[])
+        vault.set_status(note, "queued-gpu")
+        gpu_queue.enqueue("stt", res.title, info["duration"] / 60, note, src=p)
+        log(f"GPU-очередь (STT {info['duration']/60:.0f} мин): {p.name}")
+        STATS["done"] += 1
         return
     if ext == ".pdf":
-        _handle_pdf(p, title_hint=p.stem, source_url="")
+        _handle_pdf(p, title_hint=p.stem, source_url="", scope=scope)
         return
     if ext in (".djvu", ".djv"):
         has_text = router.djvu_has_text(p)
@@ -150,17 +170,17 @@ def handle_drop_file(p: Path) -> None:
             STATS["errors"] += 1
             return
         _consume(p)
-        _handle_pdf(pdf, title_hint=p.stem, source_url="")
+        _handle_pdf(pdf, title_hint=p.stem, source_url="", scope=scope)
         return
     log(f"пропуск неизвестного типа: {p.name}")
 
 
-def _handle_pdf(p: Path, title_hint: str, source_url: str) -> None:
+def _handle_pdf(p: Path, title_hint: str, source_url: str, scope: str = "global") -> None:
     info = router.pdf_analyze(p)
     log(f"PDF {p.name}: {info['pages']} стр., текст-слой: {info['text_layer']}")
     title = title_hint or p.stem
     if not info["text_layer"] and info["pages"] > config.PDF_GPU_PAGES:
-        note = vault.create_note(title=title, ntype="doc", scope="global",
+        note = vault.create_note(title=title, ntype="doc", scope=scope,
                                  source_url=source_url, captured=vault.today(),
                                  raw="", tags=[])
         vault.set_status(note, "queued-gpu")
@@ -170,11 +190,12 @@ def _handle_pdf(p: Path, title_hint: str, source_url: str) -> None:
         return
     if not info["text_layer"] and not is_night():
         DEFERRED.append({"pdf": p, "info": info, "title": title,
-                         "source_url": source_url})
+                         "source_url": source_url, "scope": scope})
         log(f"скан {info['pages']} стр. отложен до ночного окна")
         return
     res = processors.do_pdf(p, info, title)
     if res.ok:
+        res.scope = scope
         _finish_free_file(res, p)
     else:
         log(f"ОШИБКА PDF {p.name}: {res.error}")
@@ -340,18 +361,15 @@ def _do_instagram(url: str) -> processors.Result:
     res.title = (m0.stem[:80] or url)
     if m0.suffix.lower() in router.VIDEO_EXT:
         info = router.video_info(m0)
-        if info["duration"] > config.VIDEO_LOCAL_MAX_SEC:
-            note = vault.create_note(title=res.title, ntype="reel", scope=res.scope,
-                                     source_url=url, captured=vault.today(),
-                                     raw="", tags=[])
-            vault.set_status(note, "queued-gpu")
-            jid = gpu_queue.enqueue("stt", res.title, info["duration"] / 60,
-                                    note, src=m0, url=url)
-            res.gpu_jid, res.gpu_note = jid, note
-            return res
-        res2 = processors.do_video_local(m0, info)
-        res2.title, res2.source_url, res2.ntype = res.title, url, "reel"
-        return res2
+        # локально не расшифровываем: рилсы тоже уходят в GPU-очередь
+        note = vault.create_note(title=res.title, ntype="reel", scope=res.scope,
+                                 source_url=url, captured=vault.today(),
+                                 raw="", tags=[])
+        vault.set_status(note, "queued-gpu")
+        jid = gpu_queue.enqueue("stt", res.title, info["duration"] / 60,
+                                note, src=m0, url=url)
+        res.gpu_jid, res.gpu_note = jid, note
+        return res
     dest = vault.attach_name(res.title, m0.suffix.lstrip("."))
     dest.write_bytes(m0.read_bytes())
     res.attach = str(dest.relative_to(config.VAULT))
@@ -422,6 +440,7 @@ def run_one_heavy() -> None:
     log(f"ночное тяжёлое: OCR {job['pdf'].name} ({job['info']['pages']} стр.)")
     res = processors.do_pdf(job["pdf"], job["info"], job["title"])
     if res.ok:
+        res.scope = job.get("scope", "global")
         _finish_free_file(res, job["pdf"])
         DEFERRED.pop(0)
     else:
