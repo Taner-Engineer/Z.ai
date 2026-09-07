@@ -12,11 +12,14 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
+# torch и torchvision ставятся ПАРОЙ из одного индекса — иначе pip подбирает
+# несовместимые версии и docling падает на torchvision::nms. Версии = как в
+# рабочем контейнере docling:cpu на homelab (проверены на реальных документах).
 RUN if [ "$DEVICE" = "cuda" ]; then \
-        pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu121 \
+        pip install --no-cache-dir torch==2.13.0 torchvision==0.28.0 --index-url https://download.pytorch.org/whl/cu121 \
         && pip install --no-cache-dir nvidia-cublas-cu12 nvidia-cudnn-cu12 ; \
     else \
-        pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu ; \
+        pip install --no-cache-dir torch==2.13.0 torchvision==0.28.0 --index-url https://download.pytorch.org/whl/cpu ; \
     fi \
     && pip install --no-cache-dir -r requirements.txt
 
