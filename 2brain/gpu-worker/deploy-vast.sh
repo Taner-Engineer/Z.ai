@@ -2,8 +2,9 @@
 # Деплой GPU-воркера на арендованный инстанс vast.ai. Запускать ТОЛЬКО после
 # вашего явного «да» по карточке-эстимейту (см. _Drop/_needs-gpu/cards/).
 #
-#   deploy-vast.sh <IP-инстанса> [id-задания]
+#   VAST_SSHPASS='<пароль>' deploy-vast.sh <IP> <ПОРТ> [id-задания]
 #
+# vast.ai выдаёт нестандартный порт и пароль — их подставляет пользователь.
 # Без id — обрабатываются ВСЕ задания в состоянии waiting_approval (пакетная
 # аренда: один инстанс на весь накопившийся пакет).
 # Сборка образа идёт на самом инстансе (у него быстрый канал), на homelab
@@ -11,12 +12,20 @@
 set -e
 
 IP="$1"
-JOB="${2:-}"
+PORT="${2:-22}"
+JOB="${3:-}"
+SSH_OPTS="-p $PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+if [ -n "$VAST_SSHPASS" ]; then
+    SSH="sshpass -e ssh $SSH_OPTS"
+    export SSHPASS="$VAST_SSHPASS"
+else
+    SSH="ssh $SSH_OPTS"
+fi
 HERE="$(cd "$(dirname "$0")" && pwd)"
 JOBS_SRC="/srv/2brain/_Drop/_needs-gpu/jobs"
 RESULTS_DST="/srv/2brain/_Drop/_results"
 
-[ -n "$IP" ] || { echo "usage: $0 <IP-инстанса> [id-задания]"; exit 1; }
+[ -n "$IP" ] || { echo "usage: VAST_SSHPASS='<пароль>' $0 <IP> <ПОРТ> [id-задания]"; exit 1; }
 [ -d "$JOBS_SRC" ] || { echo "нет папки заданий $JOBS_SRC"; exit 1; }
 
 # --- выбрать задания ---
@@ -36,17 +45,34 @@ echo "== заданий к прогону: $count"
 
 # --- залить контекст и задания ---
 tar -C "$HERE" -cf - Dockerfile requirements.txt worker.py \
-    | ssh "root@$IP" 'mkdir -p /root/gpu-worker && tar -C /root/gpu-worker -xf -'
-tar -C "$TMPJOBS" -cf - . | ssh "root@$IP" 'mkdir -p /root/gpu-worker/jobs && tar -C /root/gpu-worker/jobs -xf -'
+    | $SSH "root@$IP" 'mkdir -p /root/gpu-worker && tar -C /root/gpu-worker -xf -'
+tar -C "$TMPJOBS" -cf - . | $SSH "root@$IP" 'mkdir -p /root/gpu-worker/jobs && tar -C /root/gpu-worker/jobs -xf -'
 
 # --- сборка (cuda) и прогон ---
-ssh "root@$IP" 'cd /root/gpu-worker \
-    && docker build --build-arg DEVICE=cuda -t 2brain-worker . \
-    && docker run --rm --gpus all -v /root/gpu-worker:/work 2brain-worker'
+# IMAGE_REF='user/repo:tag' + DOCKERHUB_TOKEN: если образ уже в реестре — pull
+# вместо сборки (быстрый старт); после локальной сборки — push, чтобы следующие
+# запуски (в т.ч. на дорогих GPU) сборку не платили вовсе.
+IMAGE_REF="${IMAGE_REF:-}"
+BUILD_CMD="docker build --build-arg DEVICE=cuda -t 2brain-worker ."
+if [ -n "$IMAGE_REF" ]; then
+    if [ -n "$DOCKERHUB_TOKEN" ]; then
+        echo "$DOCKERHUB_TOKEN" | $SSH "root@$IP" "docker login -u ${IMAGE_REF%%/*} --password-stdin" || true
+    fi
+    if $SSH "root@$IP" "docker pull $IMAGE_REF"; then
+        $SSH "root@$IP" "docker tag $IMAGE_REF 2brain-worker"
+        echo "== образ взят из реестра: $IMAGE_REF"
+    else
+        $SSH "root@$IP" "cd /root/gpu-worker && $BUILD_CMD && docker tag 2brain-worker $IMAGE_REF && docker push $IMAGE_REF" \
+            && echo "== образ собран и сохранён в реестр: $IMAGE_REF"
+    fi
+else
+    $SSH "root@$IP" "cd /root/gpu-worker && $BUILD_CMD"
+fi
+$SSH "root@$IP" 'docker run --rm --gpus all -v /root/gpu-worker:/work 2brain-worker'
 
 # --- забрать результаты ---
 mkdir -p "$RESULTS_DST"
-ssh "root@$IP" 'mkdir -p /root/gpu-worker/results && cd /root/gpu-worker/results && tar -cf - .' \
+$SSH "root@$IP" 'mkdir -p /root/gpu-worker/results && cd /root/gpu-worker/results && tar -cf - .' \
     | tar -C "$RESULTS_DST" -xf -
 echo "== результаты: $RESULTS_DST (демон подхватит следующим сканом)"
 
