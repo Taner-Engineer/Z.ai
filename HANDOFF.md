@@ -1,7 +1,21 @@
-# HANDOFF — состояние системы 2brain (обновлено: 2026-09-07 вечер)
+# HANDOFF — состояние системы 2brain (обновлено: 2026-09-07 поздний вечер)
 
 Этот файл — точка входа для ZCode на ЛЮБОЙ машине: прочитай его и продолжай работу.
 Обновляй после каждого значимого изменения и делай push.
+
+## Железо-роли (правило пользователя: хоумлаб НЕ тратит CPU на тяжёлое)
+
+- **Homelab** — только оркестрация: демон (cron 5 мин), маршрутизация, очередь,
+  SSH-координация. Никаких docling/OCR/STT/docker-build на нём.
+- **Рабочий ПК** (i7-14700KF, RTX 3050 6 ГБ, 32 ГБ) — исполнитель очереди:
+  venv `C:\Users\Us\2brain-worker`, раннер `2brain/win-worker/run_queue.py`
+  (SSH забирает jobs с homelab, исполняет worker.py, возвращает в `_Drop/_results/`).
+- **vast.ai** — для больших батчей или когда ПК выключен:
+  `VAST_SSHPASS='<пароль>' deploy-vast.sh <IP> <ПОРТ> [id]` с homelab (только
+  оркестрация; сборка/прогон на инстансе). Образ после первой сборки пушится в
+  Docker Hub (IMAGE_REF + DOCKERHUB_TOKEN) — дальше pull за минуты вместо build.
+  Рекомендация по инстансам: RTX 4070S 12 ГБ за $0.081/ч хватает; 5070 Ti-варианты
+  слабы по CPU/RAM; Blackwell (50xx) потребовал бы пересборки под cu128.
 
 ## Что построено
 
@@ -11,44 +25,42 @@ Second brain 2brain v2: Obsidian-хранилище + конвейер без No
   Windows-ПК (`C:\Users\Us\Vaults\2brain`) и Android. Зеркало в Google Drive —
   rclone каждый час (`/etc/periodic/hourly/2brain-mirror` на homelab), работает.
 - **Демон**: `/opt/2brain/` на homelab, cron каждые 5 мин от пользователя `twobrain`
-  (flock от наложений). Исходники — в этом репозитории (`2brain/`), деплой scp.
-  Маршрутизация: ссылки/статьи/YT-субтитры локально (дёшево), ВЕСЬ docling
-  (convert/OCR) и STT — в очередь `_Drop/_needs-gpu/` на мощное железо.
-  CPU homelab на конвертации НЕ тратим (решение пользователя).
-- **Исполнение очереди — рабочий ПК** (i7-14700KF, RTX 3050, 32 ГБ):
-  venv `C:\Users\Us\2brain-worker`, раннер `2brain/win-worker/run_queue.py`
-  (SSH к homelab забирает jobs, исполняет, возвращает results в `_Drop/_results/`,
-  демон доводит заметки до queued). vast.ai — запасной вариант
-  (`2brain/gpu-worker/deploy-vast.sh <IP>`).
+  (flock от наложений). ВСЕ файлы (PDF/DJVU/видео) → очередь `_Drop/_needs-gpu/`,
+  статусы waiting_approval → карточки в `cards/` → согласование пользователем.
+- **Шардирование**: worker.py режет PDF по SHARD_PAGES (по умолч. 60) страниц на
+  части, часть — процесс на GPU (CUDA_VISIBLE_DEVICES), склейка по порядку.
+  Протестировано на ПК: convert и OCR пути, склейка без потерь.
 - **«Суть»**: подписочный ZCode, скилл `2brain-sutya` (этот репозиторий),
   ежедневно пн–пт 10:00. Внешних API нет.
 - **Доктрина**: `/srv/2brain/CLAUDE.md` — правится только через /vault-calibrate
-  с явным «да» пользователя. 10 полей frontmatter, статус queued-gpu и т.д.
+  с явным «да» пользователя. 10 полей frontmatter, статус queued-gpu.
 
 ## Доступы
 
 - Homelab: `ssh root@192.168.2.9` (LAN) или `root@100.108.62.152` (NetBird).
   Сервисы Syncthing/демон работают под `twobrain` (файлы хранилища — её владение!).
 - Репозиторий: https://github.com/Taner-Engineer/Z.ai.git (этот).
-- Syncthing устройства: lenovoz500server (мастер), windows-renat-2 (рабочий ПК,
-  ID B3WCOWC-IR5GFEB-…, пере сопряжен 2026-09-07 после гибели старого identity),
-  android, windows-21-00x1.
+- Syncthing: мастер lenovoz500server + windows-renat-2 (рабочий ПК, сопряжён
+  2026-09-07 после гибели старого identity), android, windows-21-00x1.
 
 ## Открытые хвосты
 
-- GPU-бандл для vast.ai: сборка v3 на homelab (`tail /opt/2brain/state/gpu-test3.log`);
-  цель — `[test-ocr] done` + `[test-stt] done`. Не критично: рабочий ПК закрывает всё.
-- YT-субтитры иногда не скачиваются с первой попытки (ретраи до 3 в демоне).
-- ffmpeg на рабочем ПК не установлен — нужен только для STT-заданий
+- Очередь: Уманский (1043 стр. OCR, job 2026-09-07-ca30d54b) и СП 56 (49 стр.
+  convert, job 2026-09-07-1cea5cb1) ждут согласования — vast.ai ИЛИ
+  run_queue.py на ПК. СП 252 и СП 155 уже в базе (Knowledge/).
+- Docker Hub: завести аккаунт/репозиторий и прописать IMAGE_REF+DOCKERHUB_TOKEN
+  для схемы «собрал один раз — стартуй мгновенно».
+- ffmpeg на рабочем ПК не установлен — нужен только для STT
   (`winget install Gyan.FFmpeg`).
-- torch на рабочем ПК — CPU-вариант; для GPU-ускорения docling можно доустановить
-  cu121 (~2.5 ГБ), сейчас не требуется.
-- Автоматизация «Суть 10:00» живёт в workspace ZCode РАБОЧЕГО ПК — на другой машине
-  создать заново (CronCreate, cron `0 10 * * 1-5`, текст в skills/2brain-sutya).
+- DJVU→PDF (ddjvu/dpsprep) пока выполняется на homelab при enqueue — редкая
+  лёгкая операция (~минуты на книгу); если пользователь захочет строго ноль —
+  перенести в worker (нужен djvulibre на Windows).
+- Автоматизация «Суть 10:00» живёт в workspace ZCode РАБОЧЕГО ПК — на другой
+  машине создать заново (CronCreate, cron `0 10 * * 1-5`).
 
 ## Как продолжить на новой машине
 
-1. `git clone https://github.com/Taner-Engineer/Z.ai.git && ./install.sh` (скиллы + память)
+1. `git clone https://github.com/Taner-Engineer/Z.ai.git && ./install.sh`
 2. Прочитать этот HANDOFF.md и `/srv/2brain/CLAUDE.md` (доктрина).
-3. Раннер очереди: venv + `pip install docling==2.123.0 faster-whisper yt-dlp`,
+3. Раннер очереди: venv + `pip install docling==2.123.0 faster-whisper yt-dlp pymupdf`,
    затем `win-worker/run_queue.py`.
