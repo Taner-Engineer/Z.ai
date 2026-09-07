@@ -1,20 +1,23 @@
-"""Воркер GPU-инстанса: обрабатывает /work/jobs/<id>/manifest.json -> /work/results/<id>/.
+"""Воркер очереди: обрабатывает <WORK>/jobs/<id>/manifest.json -> <WORK>/results/<id>/.
 
-Умеет два вида заданий:
+WORK задаётся переменной окружения WORK_DIR (по умолчанию /work — для docker на
+vast.ai; на рабочем ПК под Windows — локальный путь).
+
+Виды заданий:
   stt — input-файл аудио/видео ЛИБО input_url (YouTube): yt-dlp -> wav -> large-v3
-  ocr — input PDF-скан: docling с full-page OCR -> markdown
+  ocr / convert — input PDF: docling с OCR (скан) или без (текст-слой), флаг ocr в манифесте
 
-Устройство определяется автоматически: cuda при наличии, иначе cpu/int8
-(на CPU-сборке образ работает медленно, но функционально идентично).
+Устройство определяется автоматически: cuda при наличии, иначе cpu/int8.
 """
 import json
-import shutil
+import os
 import subprocess
 import sys
 from pathlib import Path
 
-JOBS = Path("/work/jobs")
-RESULTS = Path("/work/results")
+WORK = Path(os.environ.get("WORK_DIR", "/work"))
+JOBS = WORK / "jobs"
+RESULTS = WORK / "results"
 
 
 def has_cuda() -> bool:
@@ -67,7 +70,7 @@ def run_ocr(job_dir: Path, m: dict) -> str:
     from docling.document_converter import DocumentConverter, PdfFormatOption
 
     opts = PdfPipelineOptions()
-    opts.do_ocr = True
+    opts.do_ocr = m.get("ocr", True)  # False = конвертация текст-слоя без OCR
     opts.do_table_structure = True
     conv = DocumentConverter(
         format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)})
@@ -87,7 +90,10 @@ def main() -> int:
         m = json.loads(mf.read_text(encoding="utf-8"))
         try:
             print(f"[{m['id']}] start: {m['kind']} «{m.get('title', '')}»", flush=True)
-            output = run_stt(mf.parent, m) if m["kind"] == "stt" else run_ocr(mf.parent, m)
+            if m["kind"] == "stt":
+                output = run_stt(mf.parent, m)
+            else:  # ocr | convert
+                output = run_ocr(mf.parent, m)
             m["status"] = "done"
             m["output"] = output
             (RESULTS / m["id"] / "manifest.json").parent.mkdir(parents=True, exist_ok=True)

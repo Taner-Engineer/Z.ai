@@ -11,8 +11,9 @@ AI-вызовов нет: «Суть» пишется подписочным ZCo
       скан <=50 стр. -> ночное окно; видео >5 мин -> GPU-очередь)
   3. Inbox: строки '- [ ]' -> метаданные + транскрипт + заметка-заглушка, [x]
   4. _Drop/_results: вернувшиеся с GPU результаты -> довести заметки до queued
-  5. Одно тяжёлое задание за прогон, только ночью 01:00-06:00 и при свободной RAM
-  6. Суточный отчёт в _raw/_daemon-report-ГГГГ-ММ-ДД.md
+  5. Суточный отчёт в _raw/_daemon-report-ГГГГ-ММ-ДД.md
+Конвертация/OCR/STT — ТОЛЬКО в очереди на мощное железо (рабочий ПК, vast.ai);
+ночного окна и локальных тяжёлых задач больше нет.
 """
 import datetime
 import fcntl
@@ -31,7 +32,6 @@ import vault
 
 STATE = config.STATE
 STATS = {"done": 0, "errors": 0}
-DEFERRED: list[dict] = []  # тяжёлое, отложенное до ночного окна
 
 
 def log(msg: str):
@@ -39,12 +39,6 @@ def log(msg: str):
     print(line)
     with open(config.LOG, "a", encoding="utf-8") as f:
         f.write(line + "\n")
-
-
-def is_night() -> bool:
-    if os.environ.get("NIGHT_FORCE"):  # для приёмки/диагностики: имитация окна
-        return True
-    return config.NIGHT_START <= datetime.datetime.now().hour < config.NIGHT_END
 
 
 def ram_available_mb() -> int:
@@ -176,32 +170,19 @@ def handle_drop_file(p: Path) -> None:
 
 
 def _handle_pdf(p: Path, title_hint: str, source_url: str, scope: str = "global") -> None:
+    """ВСЕ PDF — в очередь на мощное железо (рабочий ПК / vast.ai).
+    CPU хоумлаба на конвертации не тратим вовсе."""
     info = router.pdf_analyze(p)
     log(f"PDF {p.name}: {info['pages']} стр., текст-слой: {info['text_layer']}")
     title = title_hint or p.stem
-    if not info["text_layer"] and info["pages"] > config.PDF_GPU_PAGES:
-        note = vault.create_note(title=title, ntype="doc", scope=scope,
-                                 source_url=source_url, captured=vault.today(),
-                                 raw="", tags=[])
-        vault.set_status(note, "queued-gpu")
-        gpu_queue.enqueue("ocr", title, info["pages"], note, src=p)
-        log(f"GPU-очередь (OCR {info['pages']} стр.): {p.name}")
-        STATS["done"] += 1
-        return
-    if not info["text_layer"] and not is_night():
-        DEFERRED.append({"pdf": p, "info": info, "title": title,
-                         "source_url": source_url, "scope": scope})
-        log(f"скан {info['pages']} стр. отложен до ночного окна")
-        return
-    res = processors.do_pdf(p, info, title)
-    if res.ok:
-        res.scope = scope
-        _finish_free_file(res, p)
-    else:
-        log(f"ОШИБКА PDF {p.name}: {res.error}")
-        STATS["errors"] += 1
-        if bump_attempts(attempts_key("pdf", p.name)) >= config.MAX_ATTEMPTS:
-            _consume(p)
+    note = vault.create_note(title=title, ntype="doc", scope=scope,
+                             source_url=source_url, captured=vault.today(),
+                             raw="", tags=[])
+    vault.set_status(note, "queued-gpu")
+    kind = "convert" if info["text_layer"] else "ocr"
+    gpu_queue.enqueue(kind, title, info["pages"], note, src=p)
+    log(f"GPU-очередь ({kind} {info['pages']} стр.): {p.name}")
+    STATS["done"] += 1
 
 
 def _finish_free_file(res: processors.Result, p: Path) -> None:
@@ -431,23 +412,6 @@ def collect_gpu_results() -> None:
         STATS["done"] += 1
 
 
-# ---------- шаг 5: тяжёлое ночью ----------
-
-def run_one_heavy() -> None:
-    if not DEFERRED or not is_night() or ram_available_mb() < config.HEAVY_MIN_RAM_MB:
-        return
-    job = DEFERRED[0]
-    log(f"ночное тяжёлое: OCR {job['pdf'].name} ({job['info']['pages']} стр.)")
-    res = processors.do_pdf(job["pdf"], job["info"], job["title"])
-    if res.ok:
-        res.scope = job.get("scope", "global")
-        _finish_free_file(res, job["pdf"])
-        DEFERRED.pop(0)
-    else:
-        log(f"ОШИБКА ночного OCR: {res.error}")
-        STATS["errors"] += 1
-
-
 # ---------- шаг 6: суточный отчёт ----------
 
 def daily_report() -> None:
@@ -491,7 +455,6 @@ def once() -> None:
         handle_drop_file(p)
     handle_inbox()
     collect_gpu_results()
-    run_one_heavy()
     daily_report()
 
 
