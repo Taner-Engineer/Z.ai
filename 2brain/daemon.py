@@ -271,8 +271,10 @@ def _process_url_line(inbox: vault.Inbox, no: int, url: str,
             _fail_or_retry(inbox, no, "yt", url, f"yt-dlp: метаданные не получены ({url})")
             return
         title = js.get("title") or url
+        vid = js.get("id") or url  # чистая ссылка без &list=: иначе yt-dlp тянет плейлист
+        clean_url = f"https://www.youtube.com/watch?v={vid}" if vid != url else url
         if router.yt_has_subtitles(js):
-            res = processors.do_yt_subs(url, js)
+            res = processors.do_yt_subs(clean_url, js)
             res.title, res.scope, res.captured, res.tags = title, scope, date, plain
             if res.ok:
                 note = vault.create_note(title=res.title, ntype="video", scope=scope,

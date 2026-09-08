@@ -1,5 +1,6 @@
 """Обработчики: скачивание и извлечение текста. AI-вызовов здесь нет — только $0."""
 import json
+import time
 import re
 import shutil
 import subprocess
@@ -49,15 +50,25 @@ def do_yt_subs(url: str, js: dict) -> Result:
 
     tmp = config.STATE / "tmp"
     tmp.mkdir(parents=True, exist_ok=True)
-    lang = "ru,en"
-    for flag in ("--write-subs", "--write-auto-subs"):
+    # Выходной IP прокси ловит HTTP 429 на CDN субтитров — качаем с повторами,
+    # паузами и фолбэком: manual ru+en -> auto ru+en -> auto en
+    attempts = [
+        ["--write-subs", "--sub-langs", "ru,en"],
+        ["--write-auto-subs", "--sub-langs", "ru,en"],
+        ["--write-auto-subs", "--sub-langs", "en"],
+    ]
+    files = []
+    for i, extra in enumerate(attempts):
         subprocess.run(
-            ["/usr/local/bin/yt-dlp", flag, "--sub-langs", lang, "--skip-download",
-             "--convert-subs", "vtt", "-o", str(tmp / f"{ident}"), url],
+            ["/usr/local/bin/yt-dlp", *extra, "--no-playlist", "--retries", "4",
+             "--sleep-requests", "2", "--skip-download", "--convert-subs", "vtt",
+             "-o", str(tmp / f"{ident}"), url],
             capture_output=True, text=True, timeout=300)
-        vtt = sorted(tmp.glob(f"{ident}*.vtt"))
-        if vtt:
+        files = sorted(tmp.glob(f"{ident}*.vtt"))
+        if files:
             break
+        if i < len(attempts) - 1:
+            time.sleep(25)
     files = sorted(tmp.glob(f"{ident}*.vtt"))
     if not files:
         res.ok = False

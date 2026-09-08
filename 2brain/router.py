@@ -25,10 +25,12 @@ def url_kind(url: str) -> str:
 
 
 def yt_metadata(url: str) -> dict | None:
-    """yt-dlp -J --skip-download; None при сбое (сеть/геоблок)."""
+    """yt-dlp -J --skip-download; None при сбое (сеть/геоблок). --no-playlist:
+    URL с &list=... отдаёт метаданные только самого видео."""
     try:
         r = subprocess.run(
-            ["/usr/local/bin/yt-dlp", "-J", "--no-warnings", "--skip-download", url],
+            ["/usr/local/bin/yt-dlp", "-J", "--no-warnings", "--no-playlist",
+             "--skip-download", url],
             capture_output=True, text=True, timeout=120,
         )
         if r.returncode != 0:
