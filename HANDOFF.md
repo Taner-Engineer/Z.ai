@@ -10,12 +10,14 @@
 - **Рабочий ПК** (i7-14700KF, RTX 3050 6 ГБ, 32 ГБ) — исполнитель очереди:
   venv `C:\Users\Us\2brain-worker`, раннер `2brain/win-worker/run_queue.py`
   (SSH забирает jobs с homelab, исполняет worker.py, возвращает в `_Drop/_results/`).
-- **vast.ai** — для больших батчей или когда ПК выключен:
-  `VAST_SSHPASS='<пароль>' deploy-vast.sh <IP> <ПОРТ> [id]` с homelab (только
-  оркестрация; сборка/прогон на инстансе). Образ после первой сборки пушится в
-  Docker Hub (IMAGE_REF + DOCKERHUB_TOKEN) — дальше pull за минуты вместо build.
-  Рекомендация по инстансам: RTX 4070S 12 ГБ за $0.081/ч хватает; 5070 Ti-варианты
-  слабы по CPU/RAM; Blackwell (50xx) потребовал бы пересборки под cu128.
+- **vast.ai** — для больших батчей или когда ПК выключен. **SSH в кастомный образ
+  НЕ РАБОТАЕТ** (наш образ без sshd; 2 попытки Hermes 2026-09-08 — Connection
+  refused). Рабочий путь — **VPS bootstrap**: инстанс запускает
+  `curl -sL http://5.181.202.112:8899/bootstrap.sh | sh` (веб-консоль vast или
+  on-start script) → качает задания с VPS:8899 → гоняет worker → PUT результатов
+  обратно. Образ уже собран и запушен: `tanerakajinn/2brain-worker:cuda`
+  (torch 2.5.1 cu124, проверен Hermes). Инфра-состояние — в git на homelab
+  `/opt/2brain` (дельта через `git log`); снимки Hermes: `2brain/HANDOFF-homelab.md`.
 
 ## Что построено
 
@@ -46,10 +48,13 @@ Second brain 2brain v2: Obsidian-хранилище + конвейер без No
 ## Открытые хвосты
 
 - Очередь: Уманский (1043 стр. OCR, job 2026-09-07-ca30d54b) и СП 56 (49 стр.
-  convert, job 2026-09-07-1cea5cb1) ждут согласования — vast.ai ИЛИ
-  run_queue.py на ПК. СП 252 и СП 155 уже в базе (Knowledge/).
-- Docker Hub: завести аккаунт/репозиторий и прописать IMAGE_REF+DOCKERHUB_TOKEN
-  для схемы «собрал один раз — стартуй мгновенно».
+  convert, job 2026-09-07-1cea5cb1) ждут согласования. Исполнитель — ПК
+  (`run_queue.py`) ИЛИ vast через VPS-bootstrap (см. выше). СП 155, СП 252,
+  YT-курс Hermes — в базе, `queued`.
+- Баги Hermes (в контейнере hermes-agent, исходники /usr/local/lib/hermes-agent):
+  (1) z.ai 429-1308 не триггерит fallback-цепь; (2) aux-слот при фолбэке ушёл на
+  ПЛАТНУЮ OpenRouter-модель. Одобренный, но несделанный: watchdog-крон квоты z.ai.
+- Опция (не срочно): добавить openssh-server в образ воркера — вернёт SSH-деплой.
 - ffmpeg на рабочем ПК не установлен — нужен только для STT
   (`winget install Gyan.FFmpeg`).
 - DJVU→PDF (ddjvu/dpsprep) пока выполняется на homelab при enqueue — редкая
