@@ -15,11 +15,13 @@ COPY requirements.txt .
 # torch и torchvision ставятся ПАРОЙ из одного индекса — иначе pip подбирает
 # несовместимые версии и docling падает на torchvision::nms. Версии = как в
 # рабочем контейнере docling:cpu на homelab (проверены на реальных документах).
+# torch/torchvision ПАРОЙ из одного индекса; cu124 — CUDA 12.4, работает
+# на драйверах 550+ (vast.ai 4090 и 3090). Версии 2.5.1/0.20.1 проверены
+# с docling 2.x на реальных документах.
 RUN if [ "$DEVICE" = "cuda" ]; then \
-        pip install --no-cache-dir torch==2.13.0 torchvision==0.28.0 --index-url https://download.pytorch.org/whl/cu121 \
-        && pip install --no-cache-dir nvidia-cublas-cu12 nvidia-cudnn-cu12 ; \
+        pip install --no-cache-dir torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124 ; \
     else \
-        pip install --no-cache-dir torch==2.13.0 torchvision==0.28.0 --index-url https://download.pytorch.org/whl/cpu ; \
+        pip install --no-cache-dir torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cpu ; \
     fi \
     && pip install --no-cache-dir -r requirements.txt
 
