@@ -272,6 +272,13 @@ def run_ocr(job_dir: Path, m: dict) -> str:
     return out.name
 
 
+def should_run(m: dict) -> bool:
+    """Гоняем только задания, ждущие запуска. sent/done/failed уже исполнены
+    (run_queue помечает sent после возврата) — повторный запуск раннера
+    не должен перегонять их заново."""
+    return m.get("status") in (None, "", "waiting_approval")
+
+
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "--part":
         _convert_single(sys.argv[2], sys.argv[3], sys.argv[4] == "1")
@@ -282,6 +289,9 @@ def main() -> int:
     ok = 0
     for mf in sorted(JOBS.glob("*/manifest.json")):
         m = json.loads(mf.read_text(encoding="utf-8"))
+        if not should_run(m):
+            print(f"[{m['id']}] skip: status={m.get('status')}", flush=True)
+            continue
         try:
             print(f"[{m['id']}] start: {m['kind']} «{m.get('title', '')}»", flush=True)
             if m["kind"] == "stt":

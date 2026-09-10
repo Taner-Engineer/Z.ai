@@ -73,6 +73,10 @@ def main():
             if pr.returncode != 0:
                 print(pr.stderr.decode()[-300:], file=sys.stderr)
                 sys.exit("не удалось вернуть результаты")
+        # раннер пишет в _results от root — возвращаем владение twobrain сразу,
+        # не дожидаясь cron-хука на homelab (демон работает от twobrain)
+        subprocess.run(SSH + [f"chown -R twobrain:twobrain {REMOTE_RESULTS}"],
+                       capture_output=True, timeout=60)
         # пометить исходные манифесты отправленными
         for mf in manifests:
             jid = mf.parent.name

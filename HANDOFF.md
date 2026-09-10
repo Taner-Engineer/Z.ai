@@ -21,8 +21,9 @@
 - ИНЦИДЕНТ 2026-09-08, починено: (1) crond на homelab был мёртв — демон не
   срабатывал по расписанию; запущен, в runlevel default. (2) Раннер возвращает
   tar'ом файлы под root — демон (twobrain) падал с PermissionError при переносе
-  из `_results` в `_processed`; вылечено chown. ПРИ НОВЫХ ВОЗВРАТАХ может
-  повториться: лечится `ssh root@192.168.2.9 'chown -R twobrain:twobrain /srv/2brain/_Drop/_results'`.
+  из `_results` в `_processed`. 2026-09-10 закрыто НАСОВСЕМ: run_queue сам делает
+  chown после возврата + root-cron перед каждым прогоном демона чинит `_results`
+  и `/var/tmp/dpsprep` (та же ловушка dpsprep — root-прогон захватывал workdir).
 - Рабочий ПК — всегда-доступный узел: сон/гибернация отключены, OpenSSH Server
   поднят (порт 22, вход по паролю пользователя Us), NetBird уже стоит
   (**100.108.185.69**) — с любого устройства mesh: `ssh Us@100.108.185.69`.
@@ -77,6 +78,11 @@ Second brain 2brain v2: Obsidian-хранилище + конвейер без No
 - Репозиторий: https://github.com/Taner-Engineer/Z.ai.git (этот).
 - Syncthing: мастер lenovoz500server + windows-renat-2 (рабочий ПК, сопряжён
   2026-09-07 после гибели старого identity), android, windows-21-00x1.
+- Правило владельцев (2026-09-10): демон и всё в `/srv/2brain`, `/opt/2brain`,
+  `/var/tmp/dpsprep` — от `twobrain`. Ручные операции там — только
+  `su -s /bin/sh twobrain -c "..."`; ssh root — админ-действия (пакеты, сервисы,
+  права). Крон демона консолидирован в ОДНУ root-строку с chown-хуком (бэкап
+  `/etc/crontabs/root.bak-2brain-20260910`); crontab twobrain пуст.
 
 ## Открытые хвосты
 
