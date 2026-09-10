@@ -94,6 +94,19 @@ def _gpu_stats() -> dict:
         return {}
 
 
+def _ensure_cuda_dlls() -> None:
+    """RapidOCR (onnxruntime-gpu) в docling ищет CUDA/cuDNN DLL через PATH —
+    они лежат в torch/lib установки torch с CUDA."""
+    try:
+        import torch
+        lib = Path(torch.__file__).parent / "lib"
+        if lib.is_dir():
+            os.environ["PATH"] = str(lib) + os.pathsep + os.environ.get("PATH", "")
+            os.add_dll_directory(str(lib))
+    except Exception:
+        pass  # torch без CUDA или его нет — работаем как раньше (CPU)
+
+
 def _cpu_cores() -> int:
     return os.cpu_count() or 4
 
@@ -120,6 +133,7 @@ def _pick_workers(ocr: bool, probe_vram_mb: float | None) -> tuple[int, str]:
 def _convert_single(src: str, dst: str, ocr: bool) -> None:
     """Конвертация одного PDF в текущем процессе (модель грузится один раз
     на процесс — держим воркер живым, он берёт чанки из очереди)."""
+    _ensure_cuda_dlls()
     from docling.datamodel.base_models import InputFormat
     from docling.datamodel.pipeline_options import PdfPipelineOptions
     from docling.document_converter import DocumentConverter, PdfFormatOption
