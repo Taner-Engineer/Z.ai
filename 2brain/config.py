@@ -26,8 +26,6 @@ LOG = RAW / "_daemon.log"
 # --- Инструменты ---
 WHISPER_BIN = "/opt/whisper.cpp/build/bin/whisper-cli"
 WHISPER_MODEL = "/opt/whisper.cpp/models/ggml-small.bin"
-DOCLING_IMAGE = "docling:cpu"
-DOCLING_CACHE = Path("/opt/2brain/model_cache")
 
 # Сеть: DNS роутера блокирует YouTube (NXDOMAIN), поэтому внешние запросы
 # yt-dlp/trafilatura идут через socks-прокси sing-box — он резолвит имена на выезде

@@ -12,9 +12,6 @@ import router
 import vault
 
 
-_LAST_DOCLING_ERROR: list[str] = []  # хвост stderr последнего сбоя docling
-
-
 class Result:
     """Итог обработки одного элемента."""
     def __init__(self):
@@ -162,59 +159,6 @@ def do_video_local(path: Path, info: dict) -> Result:
     if not text.strip():
         res.ok = False
         res.error = "транскрипт пуст (в видео нет речи?)"
-    return res
-
-
-# --- PDF через docling (в контейнере) ---
-
-def _docling_convert(pdf: Path, out_md: Path, ocr: bool) -> bool:
-    """docling:cpu контейнер (ENTRYPOINT python3): смонтировать pdf/out/кэш,
-    выполнить convert_one.py. ocr=True только для сканов."""
-    work = config.STATE / "docling"
-    work.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(pdf, work / "input.pdf")
-    shutil.copy2(Path(__file__).parent / "convert_one.py", work / "convert_one.py")
-    (work / "out.md").unlink(missing_ok=True)
-    r = subprocess.run(
-        ["docker", "run", "--rm",
-         "--user", "0:0",  # образ docling живёт под непривилегированным пользователем
-         "-v", f"{work}:/work",
-         "-v", f"{config.DOCLING_CACHE}:/work/model_cache",
-         "-e", "HF_HOME=/work/model_cache/hf",
-         "-e", "DOCLING_CACHE_DIR=/work/model_cache/docling",
-         "--entrypoint", "python3",
-         config.DOCLING_IMAGE,
-         "/work/convert_one.py", "/work/input.pdf", "/work/out.md",
-         "ocr" if ocr else "no-ocr"],
-        capture_output=True, text=True, timeout=4 * 3600)
-    ok = r.returncode == 0 and (work / "out.md").exists() and (work / "out.md").stat().st_size > 0
-    if ok:
-        shutil.copy2(work / "out.md", out_md)
-        (work / "input.pdf").unlink(missing_ok=True)
-        (work / "out.md").unlink(missing_ok=True)
-    else:
-        log_err = (r.stderr or r.stdout or "")[-400:]
-        _LAST_DOCLING_ERROR.append(log_err)
-    return ok
-
-
-def do_pdf(path: Path, info: dict, title_hint: str = "") -> Result:
-    """PDF с текстовым слоем — сразу; скан <=50 стр. — тоже локально (OCR, ночь)."""
-    res = Result()
-    res.ntype = "doc"
-    res.title = title_hint or path.stem
-    out = vault.attach_name(res.title)
-    ok = _docling_convert(path, out, ocr=not info["text_layer"])
-    if not ok:
-        res.ok = False
-        res.error = "docling не смог конвертировать"
-        if _LAST_DOCLING_ERROR:
-            res.error += f": {_LAST_DOCLING_ERROR[-1].strip()[-200:]}"
-        return res
-    res.attach = str(out.relative_to(config.VAULT))
-    raw = vault.raw_name("pdfmeta", path.stem)
-    raw.write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
-    res.raw = str(raw.relative_to(config.VAULT))
     return res
 
 
