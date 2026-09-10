@@ -1,5 +1,6 @@
 """Обработчики: скачивание и извлечение текста. AI-вызовов здесь нет — только $0."""
 import json
+import sys
 import time
 import re
 import shutil
@@ -228,10 +229,16 @@ def djvu_to_pdf(path: Path, has_text: bool) -> Path | None:
     if out.exists():
         out = config.DROP / f"{path.stem}-{int(path.stat().st_size) % 10000}.pdf"
     if has_text:
-        r = _venv_run(["/opt/2brain-venv/bin/dpsprep", "-q",
+        # у dpsprep нет «quiet»: -q это --quality (int), флаг без значения
+        # ронял конвертер и молча уходили на ddjvu без текста
+        r = _venv_run(["/opt/2brain-venv/bin/dpsprep", "--quality", "85",
                        str(path), str(out)], timeout=3600)
         if r.returncode == 0 and out.exists():
             return out
+        # фолбэк ниже потеряет OCR-слой — оставляем след в cron.log
+        print(f"dpsprep rc={r.returncode}, OCR-слой теряется: "
+              f"{(r.stderr or r.stdout or '')[-300:].strip()}",
+              file=sys.stderr, flush=True)
     r = subprocess.run(["ddjvu", "-format=pdf", "-quality=85",
                         str(path), str(out)], capture_output=True, timeout=3600)
     return out if (r.returncode == 0 and out.exists()) else None
