@@ -1,10 +1,18 @@
-# HANDOFF — состояние системы 2brain (обновлено: 2026-09-08, передача в новую сессию)
+# HANDOFF — состояние системы 2brain (обновлено: 2026-09-10, передача в новую сессию)
 
 Этот файл — точка входа для ZCode на ЛЮБОЙ машине: прочитай его и продолжай работу.
 Обновляй после каждого значимого изменения и делай push.
 
 ## Срочно знать при старте новой сессии
 
+- Дельта 2026-09-10 (коммиты e7d4573, 6427f08, 2cfb8a7, f2028ce; детали —
+  `flash-pilot/STATUS.md`): (1) фикс dpsprep — `-q` это `--quality`, а не quiet,
+  старый вызов падал и ddjvu-фолбэк молча терял OCR-слой, теперь `--quality 85`;
+  (2) проверка текст-слоя после DJVU→PDF (`pdf_analyze` меряет середину книги,
+  ERROR при потере слоя) — книга с текст-слоем идёт как `convert`, а не `ocr`;
+  (3) docling удалён с homelab — ВСЕ PDF/DJVU через GPU-очередь на рабочий ПК,
+  RTX 3050 реально используется (torch cu130 + onnxruntime-gpu). DJVU→PDF
+  остаётся на homelab насовсем.
 - Очередь 2026-09-08 ЗАВЕРШЕНА: СП 252, СП 56 (convert) и Уманский (1043 стр.,
   OCR, 5414 с, 0.2 стр/с) — done, результаты на homelab, демон довёл все заметки
   до queued. «Суть» написана: СП 252, СП 56, СП 155 (extracted). Уманский — queued,
@@ -30,8 +38,11 @@
 - **Homelab** — только оркестрация: демон (cron 5 мин), маршрутизация, очередь,
   SSH-координация. Никаких docling/OCR/STT/docker-build на нём.
 - **Рабочий ПК** (i7-14700KF, RTX 3050 6 ГБ, 32 ГБ) — исполнитель очереди:
-  venv `C:\Users\Us\2brain-worker`, раннер `2brain/win-worker/run_queue.py`
+  venv `C:\Users\Us\2brain-worker\venv`, раннер `2brain/win-worker/run_queue.py`
   (SSH забирает jobs с homelab, исполняет worker.py, возвращает в `_Drop/_results/`).
+  CUDA-стек: torch 2.14.0+cu130, onnxruntime-gpu 1.29.0;
+  `worker.py::_ensure_cuda_dlls()` сам подкладывает CUDA/cuDNN DLL из torch/lib —
+  GPU-провайдеры включаются без настройки; RTX 3050 реально используется.
 - **vast.ai** — для больших батчей или когда ПК выключен. **SSH в кастомный образ
   НЕ РАБОТАЕТ** (наш образ без sshd; 2 попытки Hermes 2026-09-08 — Connection
   refused). Рабочий путь — **VPS bootstrap**: инстанс запускает
@@ -78,9 +89,13 @@ Second brain 2brain v2: Obsidian-хранилище + конвейер без No
 - Опция (не срочно): добавить openssh-server в образ воркера — вернёт SSH-деплой.
 - ffmpeg на рабочем ПК не установлен — нужен только для STT
   (`winget install Gyan.FFmpeg`).
-- DJVU→PDF (ddjvu/dpsprep) пока выполняется на homelab при enqueue — редкая
-  лёгкая операция (~минуты на книгу); если пользователь захочет строго ноль —
-  перенести в worker (нужен djvulibre на Windows).
+- DJVU→PDF (ddjvu/dpsprep) — решено: остаётся на homelab насовсем (~2 мин на
+  книгу 1043 стр. на 4 ядрах; dpsprep требует C-биндинги djvulibre-python, на
+  Windows нужен WSL — отвергнуто). Фикс `-q`→`--quality 85` уже в проде (e7d4573).
+- На homelab не используются кодом docker-образ docling:cpu и
+  `/opt/2brain/model_cache` — удалить вручную при чистке диска.
+- vast.ai-образ воркера (torch 2.5.1 cu124) не пересобран под onnxruntime-gpu —
+  при нужде повторить рецепт рабочего ПК (f2028ce).
 - Автоматизация «Суть 10:00» живёт в workspace ZCode РАБОЧЕГО ПК — на другой
   машине создать заново (CronCreate, cron `0 10 * * 1-5`).
 
@@ -88,5 +103,10 @@ Second brain 2brain v2: Obsidian-хранилище + конвейер без No
 
 1. `git clone https://github.com/Taner-Engineer/Z.ai.git && ./install.sh`
 2. Прочитать этот HANDOFF.md и `/srv/2brain/CLAUDE.md` (доктрина).
-3. Раннер очереди: venv + `pip install docling==2.123.0 faster-whisper yt-dlp pymupdf`,
-   затем `win-worker/run_queue.py`.
+3. Раннер очереди: venv +
+   `pip install docling==2.123.0 onnxruntime-gpu pymupdf faster-whisper yt-dlp`,
+   затем torch: `pip install --no-deps --force-reinstall torch==2.14.0+cu130
+   --index-url https://download.pytorch.org/whl/cu130` (ловушка: обычный
+   `pip install torch==2.14.0` с cu-индексом промахивается — pip считает
+   установленную +cpu удовлетворяющей). CUDA DLL подтянет worker.py сам.
+   Запуск: `win-worker/run_queue.py`.

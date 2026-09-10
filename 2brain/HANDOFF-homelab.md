@@ -1,7 +1,53 @@
-# HANDOFF — 2brain v2 → Zcode (снимок 2, 2026-09-08 вечер)
+# HANDOFF — 2brain v2 → Zcode (снимок 3, 2026-09-10)
 
 > **Правило обслуживания**: снимок на момент передачи. Дельта между передачами — `git log`.
-> Предыдущий снимок: коммит 708c72f (ночь 2026-09-08).
+> Предыдущий снимок: 2 (2026-09-08 вечер).
+
+## Дельта до снимка 3 (2026-09-10, ZCode flash)
+
+### 1. Фикс dpsprep (e7d4573, processors.py)
+- `-q` у dpsprep — это `--quality`, а НЕ quiet: старый вызов падал, фолбэк на
+  ddjvu молча терял OCR-слой. Теперь `--quality 85`; при падении dpsprep stderr
+  пишется в cron.log.
+- DJVU→PDF остаётся на homelab НАВСЕГДА: dpsprep требует C-биндинги
+  djvulibre-python, на Windows нужен WSL (не установлен, админ-права +
+  перезагрузка) — перенос на рабочий ПК отвергнут. dpsprep 2.8.3, ~2 мин на
+  книгу 1043 стр. на 4 ядрах homelab.
+
+### 2. Проверка текст-слоя (6427f08, router.py + daemon.py)
+- `router.pdf_analyze` меряет текст в 15 страницах из СЕРЕДИНЫ книги (титульные
+  давали ложное «нет слоя»); `daemon._handle_pdf(src_has_text=)` пишет ERROR в
+  _daemon.log, если у DJVU был OCR-слой, а в PDF текста нет.
+- Валидация на «Уманском»: 1043 стр. за ~2 мин, 4666 симв./стр. — такая книга
+  идёт как `convert` (docling без OCR, минуты), а не `ocr` (1,5 ч). Тесты:
+  `2brain/tests/` — 7 unittest, зелёные на Windows (venv воркера) и на homelab
+  (/opt/2brain-venv).
+
+### 3. Docling только на GPU-воркере (2cfb8a7, f2028ce) — требование владельца
+- Локальный docling:cpu-контейнер удалён из кода homelab (−87 строк:
+  do_pdf/_docling_convert/convert_one). ВСЕ PDF/DJVU идут через GPU-очередь на
+  рабочий ПК. Воркер на RTX 3050 6 ГБ:
+  - torch 2.14.0+cu130 (обычный `pip install torch==2.14.0` с cu-индексом
+    промахивается — pip считает установленную +cpu удовлетворяющей);
+  - onnxruntime-gpu 1.29.0 вместо onnxruntime — OCR-движок docling (RapidOCR,
+    onnx) сам ставит CUDAExecutionProvider первым;
+  - `worker.py::_ensure_cuda_dlls()` подкладывает CUDA/cuDNN DLL из torch/lib в
+    PATH — без него ORT тихо падает в CPU («cublasLt64_13.dll is missing»);
+    провайдеры [CPU]→[CUDA, CPU], smoke-тест 12 стр. — код 0.
+  - Прочие версии venv воркера: docling 2.123.0, rapidocr 3.9.2, pymupdf 1.28.2,
+    faster-whisper 1.2.1.
+
+### 4. Deploy-состояние
+- Homelab /opt/2brain: daemon.py, router.py, processors.py, config.py, worker.py
+  — синхронны зеркалу (md5 сверены). Бэкапы на месте: `*.bak-q`,
+  `*.bak-txtcheck`, `convert_one.py.bak-docling`.
+- Docker-образ docling:cpu и `/opt/2brain/model_cache` больше не используются
+  кодом — можно удалить вручную при чистке диска.
+- Рабочий ПК: код воркера `C:\Users\Us\zcode-sync\2brain\gpu-worker\worker.py`,
+  venv `C:\Users\Us\2brain-worker\venv` (torch cu130 + onnxruntime-gpu).
+
+Рекомендации «Порядок действий» снимка 2 устарели: оба GPU-задания выполнены
+2026-09-08; Hermes-хвосты (п.5 снимка 2) не тронуты.
 
 ## Статус репозиториев
 - `/srv/2brain` (vault): последний коммит `c1177d4`
