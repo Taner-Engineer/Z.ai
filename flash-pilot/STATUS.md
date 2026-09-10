@@ -1,56 +1,56 @@
-# STATUS: 2brain — DJVU без потери текста + docling на GPU рабочего ПК (этапы завершены 2026-09-10)
+# STATUS: 2brain — HANDOFF обновлён, владельцы починены навсегда, Уманский перегнан convert-путём (2026-09-10)
 
-Сессия, не видевшая прошлой переписки: читай это + `git log --oneline -6`.
+Сессия, не видевшая прошлой переписки: читай это + `git log --oneline -8`.
 
 ## Итоговое состояние
 
-1. **DJVU→PDF остаётся на homelab** (dpsprep 2.8.3, ~2 мин на книгу из 1043 стр.
-   на 4 ядрах). Перенос на рабочий ПК отвергнут: нужен WSL (не установлен,
-   админ-права + перезагрузка), т.к. dpsprep требует C-биндинги djvulibre-python.
-2. **PDF→Markdown через docling — ТОЛЬКО на рабочем ПК** (требование владельца):
-   локальный docling:cpu-контейнер удалён из кода homelab (коммит 2cfb8a7),
-   все PDF/DJVU идут через GPU-очередь на воркер.
-3. **Воркер использует RTX 3050** (требование владельца):
-   - torch 2.14.0+cu130 (был +cpu; первый `pip install torch==2.14.0` с cu-индексом
-     промахнулся — pip счёл +cpu удовлетворяющим; верный путь:
-     `pip install --no-deps --force-reinstall torch==2.14.0+cu130 --index-url
-     https://download.pytorch.org/whl/cu130`);
-   - onnxruntime заменён на onnxruntime-gpu 1.29.0 — OCR-движок docling
-     (RapidOCR, onnx) сам ставит CUDAExecutionProvider первым;
-   - `worker.py::_ensure_cuda_dlls()` подкладывает CUDA/cuDNN DLL из torch/lib
-     в PATH (без этого ORT тихо падает в CPU: «cublasLt64_13.dll is missing»)
-     — коммит f2028ce. Доказано: без хелпера провайдеры = [CPU], с хелпером =
-     [CUDA, CPU]; smoke-тест 12 стр. через воркер — код 0, без CPU-фолбэка.
-
-## Сделано ранее этим же днём (коммиты e7d4573, 6427f08)
-
-- Фикс вызова dpsprep (`-q` — это `--quality`, а не quiet): фолбэк на ddjvu
-  терял OCR-слой молча; теперь `--quality 85` + stderr при падении в cron.log.
-- `router.pdf_analyze` меряет текст в 15 страницах из СЕРЕДИНЫ книги (первые —
-  титул — давали ложное «нет слоя»); `daemon._handle_pdf(src_has_text=)` пишет
-  ERROR в _daemon.log, если у DJVU был OCR-слой, а в PDF текста нет.
-- Валидация на «Уманском»: 1043 стр. за ~2 мин, текст 4666 симв./стр. — такая
-  книга теперь идёт как `convert` (docling без OCR, минуты), а не `ocr` (1,5 ч).
-- Тесты: `2brain/tests/` — 7 unittest, зелёные на Windows (venv воркера) и на
-  homelab (`/opt/2brain-venv`).
+1. **HANDOFF.md (github Z.ai) и 2brain/HANDOFF-homelab.md (снимок 3)** обновлены под
+   три изменения прошлого этапа: dpsprep-фикс, проверка текст-слоя, docling на
+   GPU воркере (коммит a955b04).
+2. **Проблема владельцев root/twobrain закрыта НАСОВСЕГДА** (коммит 77e03f5):
+   - пусков было две: ручные прогоны от root (захватили /var/tmp/dpsprep —
+     dpsprep упал с PermissionError, ddjvu-фолбэк потерял текст; НОВАЯ проверка
+     текст-слоя это поймала: ERROR в _daemon.log, задание ушло бы как ocr) и
+     run_queue, возвращающий tar от root в _results;
+   - фикс: ОДНА cron-строка в /etc/crontabs/root — chown _results и
+     /var/tmp/dpsprep, затем su -s /bin/sh twobrain демона, лог в cron.log
+     (бэкап /etc/crontabs/root.bak-2brain-20260910; crontab twobrain пуст);
+   - run_queue.py делает chown сразу после возврата результатов (окно в 5 мин
+     не существует); worker.py::should_run() пропускает sent/done/failed —
+     повторный запуск раннера больше ничего не перегоняет;
+   - правило в HANDOFF «Доступы»: ручное на homelab — su -s /bin/sh twobrain,
+     ssh root — только админ-действия.
+   - Тесты: 13 unittest (7 старых + 6 should_run) — зелёные.
+3. **«Уманский» перегнан новым путём** (2026-09-10-97d6a91c, convert):
+   - 13:43 enqueue: текст-слой True (dpsprep сохранил OCR-слой после chown);
+   - раннер: 1043 стр. за 657 с = **1.59 стр/с** (старый ocr-путь на CPU был
+     0.19 стр/с — в 8 раз быстрее); 21 чанк, 1 воркер (лимит VRAM 3050),
+     GPU util 7% — convert упирается в CPU; probe-телеметрия в манифесте
+     (_processed/2026-09-10-97d6a91c/manifest.json);
+   - демон довёл заметку «...Уманск (2).md» до queued сам, raw
+     _raw/2026-09-10-transcript-2026-09-10-97d6a91c.txt (UTF-8, 4,4 млн симв.)
+     — ни одного ручного chown за весь цикл.
 
 ## Deploy-состояние
 
-- Homelab `/opt/2brain/`: daemon.py, router.py, processors.py, config.py,
-  worker.py — синхронны зеркалу (md5 сверены). Бэкапы: `*.bak-q`,
-  `*.bak-txtcheck`, `convert_one.py.bak-docling`. Docker-образ docling:cpu и
-  `/opt/2brain/model_cache` на homelab больше не используются кодом — можно
-  удалить вручную при чистке диска.
-- Рабочий ПК: код воркера — `C:\Users\Us\zcode-sync\2brain\gpu-worker\worker.py`
-  (оттуда его запускает run_queue.py), venv `C:\Users\Us\2brain-worker` —
-  torch cu130 + onnxruntime-gpu.
+- Homelab: /opt/2brain синхронен зеркалу (правки этапа касались только
+  win-worker/run_queue.py и gpu-worker/worker.py — исполняются на рабочем ПК
+  из C:\Users\Us\zcode-sync, деплой на homelab не требовался). Крон — см. п.2.
+- Рабочий ПК: venv C:\Users\Us\2brain-worker\venv (torch cu130,
+  onnxruntime-gpu 1.29.0), раннер запускался из зеркала репо.
+
+## Известные мелочи
+
+- В Knowledge/ теперь ДВЕ заметки Уманского: старая (2026-09-08, ocr-сырьё,
+  вложение 2,25 МБ) и новая «(2)» (convert-сырьё). Старую можно удалить —
+  Суть не писалась; решение за владельцем.
+- В jobs/ лежат 3 старых sent-задания (2026-09-07-*) — теперь безвредны
+  (worker их скипает), при чистке можно архивировать.
 
 ## Что дальше (опции)
 
-- Первый настоящий прогон покажет новую скорость OCR (было 0.19 стр/с на CPU);
-  телеметрия в манифесте результата (probe-фаза теперь включится: есть CUDA).
-- Перегнать «Уманского» новым путём при желании: DJVU из
-  `/srv/2brain/_Drop/_processed/` обратно в `_Drop` → уйдёт как `convert`.
-- Обновить HANDOFF.md (homelab + github Z.ai) под все три изменения.
-- vast.ai-ветка воркера: там свой образ (torch 2.5.1 cu124) — при нужде
-  пересобрать под onnxruntime-gpu аналогично.
+- «Суть» по Уманскому — сырьё готово (заметка (2), queued).
+- Чистка homelab: docling:cpu-образ, /opt/2brain/model_cache, старые jobs.
+- vast.ai-образ (torch 2.5.1 cu124) — пересобрать под onnxruntime-gpu по
+  рецепту f2028ce при нужде.
+- Хвосты из HANDOFF.md: RDP-перезагрузка ПК, ffmpeg для STT, баги Hermes.
