@@ -79,10 +79,15 @@ def pdf_analyze(path: Path) -> dict:
     import pymupdf
     doc = pymupdf.open(path)
     n = doc.page_count
-    sample = min(n, 15)
-    chars = sum(len(page.get_text().strip()) for page in doc.pages(0, sample, 1))
+    if n == 0:
+        doc.close()
+        return {"pages": 0, "text_layer": False, "chars_per_page": 0}
+    # у книг первые страницы почти пусты (титул, выходные данные) — текст ищем в середине
+    start = max(0, n // 2 - 7)
+    stop = min(start + 15, n)
+    chars = sum(len(page.get_text().strip()) for page in doc.pages(start, stop, 1))
     doc.close()
-    avg = chars / sample if sample else 0
+    avg = chars / (stop - start)
     return {"pages": n, "text_layer": avg >= config.PDF_CHARS_PER_PAGE,
             "chars_per_page": round(avg)}
 

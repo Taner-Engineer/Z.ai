@@ -164,15 +164,20 @@ def handle_drop_file(p: Path) -> None:
             STATS["errors"] += 1
             return
         _consume(p)
-        _handle_pdf(pdf, title_hint=p.stem, source_url="", scope=scope)
+        _handle_pdf(pdf, title_hint=p.stem, source_url="", scope=scope,
+                    src_has_text=has_text)
         return
     log(f"пропуск неизвестного типа: {p.name}")
 
 
-def _handle_pdf(p: Path, title_hint: str, source_url: str, scope: str = "global") -> None:
+def _handle_pdf(p: Path, title_hint: str, source_url: str, scope: str = "global",
+                src_has_text: bool = False) -> None:
     """ВСЕ PDF — в очередь на мощное железо (рабочий ПК / vast.ai).
     CPU хоумлаба на конвертации не тратим вовсе."""
     info = router.pdf_analyze(p)
+    if src_has_text and not info["text_layer"]:
+        log(f"ОШИБКА {p.name}: у DJVU был OCR-слой, но в PDF текста нет — "
+            f"потерян при конвертации (dpsprep упал? см. state/cron.log); уходит в OCR")
     log(f"PDF {p.name}: {info['pages']} стр., текст-слой: {info['text_layer']}")
     title = title_hint or p.stem
     note = vault.create_note(title=title, ntype="doc", scope=scope,
