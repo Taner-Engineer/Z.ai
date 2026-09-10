@@ -143,7 +143,7 @@ def render_stub(title: str, ntype: str, scope: str, source_url: str,
         "related: []",
         "---",
         "",
-        "## Суть",
+        "## Карта",
         "",
         "## Заметки",
         "",
@@ -157,8 +157,8 @@ def create_note(title: str, ntype: str, scope: str, source_url: str,
     p = note_path(title, scope)
     text = render_stub(title, ntype, scope, source_url, captured, raw, tags)
     if body_lead:
-        # ссылка на полный текст (doc) или вложение — перед разделом Суть
-        text = text.replace("## Суть\n", f"{body_lead}\n\n## Суть\n", 1)
+        # ссылка на полный текст (doc) или вложение — перед разделом Карта
+        text = text.replace("## Карта\n", f"{body_lead}\n\n## Карта\n", 1)
     p.write_text(text, encoding="utf-8")
     return p
 
