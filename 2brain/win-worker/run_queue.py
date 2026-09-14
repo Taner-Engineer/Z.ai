@@ -31,6 +31,14 @@ def sh(cmd, **kw):
 
 
 def main():
+    # защита от наложения запусков (планировщик + вручную)
+    lock = open(HERE / "queue.lock", "w")
+    try:
+        import msvcrt
+        msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        print("другой экземпляр раннера уже работает — выход")
+        return 0
     if not VENV_PY.exists():
         sys.exit("нет venv: C:\\Users\\Us\\2brain-worker\\venv — см. README win-worker")
     tmp = Path(tempfile.mkdtemp(prefix="2brain-queue-"))
