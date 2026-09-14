@@ -15,13 +15,13 @@ import signal
 import subprocess
 import sys
 import tarfile
-import tempfile
 from pathlib import Path
 
 SSH = ["ssh", "-o", "ConnectTimeout=10", "root@192.168.2.9"]
 REMOTE_JOBS = "/srv/2brain/_Drop/_needs-gpu/jobs"
 REMOTE_RESULTS = "/srv/2brain/_Drop/_results"
 HERE = Path(__file__).parent
+WORK = HERE / "work"  # постоянный каталог между прогонами: resume без ручного seed
 WORKER = HERE.parent / "gpu-worker" / "worker.py"
 VENV_PY = Path(r"C:\Users\Us\2brain-worker\venv\Scripts\python.exe")
 
@@ -55,6 +55,31 @@ def seed_results(src_dirs, results_dir) -> int:
     return n
 
 
+def drop_sent_jobs(jobs_dir) -> int:
+    """Удалить из jobs задания со статусом sent (уже доставлены). Возвращает сколько."""
+    n = 0
+    for mf in sorted(Path(jobs_dir).glob("*/manifest.json")):
+        try:
+            m = json.loads(mf.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue  # битый json — считаем не-sent, не трогаем
+        if isinstance(m, dict) and m.get("status") == "sent":
+            shutil.rmtree(mf.parent, ignore_errors=True)
+            n += 1
+    return n
+
+
+def cleanup_after_delivery(results_dir, delivered_ids) -> int:
+    """Удалить доставленные каталоги результатов. Возвращает сколько удалено."""
+    n = 0
+    for jid in delivered_ids:
+        d = Path(results_dir) / jid
+        if d.is_dir():
+            shutil.rmtree(d, ignore_errors=True)
+            n += 1
+    return n
+
+
 def main():
     parser = argparse.ArgumentParser(description="Раннер очереди 2brain")
     parser.add_argument("--seed-results", action="append", default=[], metavar="DIR",
@@ -70,10 +95,10 @@ def main():
         return 0
     if not VENV_PY.exists():
         sys.exit("нет venv: C:\\Users\\Us\\2brain-worker\\venv — см. README win-worker")
-    tmp = Path(tempfile.mkdtemp(prefix="2brain-queue-"))
-    jobs, results = tmp / "jobs", tmp / "results"
-    jobs.mkdir(parents=True)
-    results.mkdir(parents=True)
+    WORK.mkdir(parents=True, exist_ok=True)
+    jobs, results = WORK / "jobs", WORK / "results"
+    jobs.mkdir(exist_ok=True)
+    results.mkdir(exist_ok=True)
 
     # 1) забрать задания
     p = subprocess.run(SSH + [f"tar -C {REMOTE_JOBS} -cf - ."],
@@ -81,10 +106,15 @@ def main():
     if p.returncode != 0 or not p.stdout:
         print("очередь пуста или homelab недоступен")
         return 0
-    with open(tmp / "jobs.tar", "wb") as f:
+    with open(WORK / "jobs.tar", "wb") as f:
         f.write(p.stdout)
-    with tarfile.open(tmp / "jobs.tar") as tf:
+    with tarfile.open(WORK / "jobs.tar") as tf:
         tf.extractall(jobs)
+
+    # 1.2) уже доставленные прошлым прогоном задания не запускаем повторно
+    dropped = drop_sent_jobs(jobs)
+    if dropped:
+        print(f"пропущено доставленных ранее: {dropped}")
 
     manifests = sorted(jobs.glob("*/manifest.json"))
     if not manifests:
@@ -109,7 +139,7 @@ def main():
         if s is not None:
             signal.signal(s, _bail)
 
-    env = {**os.environ, "WORK_DIR": str(tmp)}
+    env = {**os.environ, "WORK_DIR": str(WORK)}
     proc = subprocess.Popen([str(VENV_PY), str(WORKER)], env=env)
     try:
         rc = proc.wait()
@@ -122,10 +152,11 @@ def main():
 
     # 3) вернуть результаты на homelab
     if any(results.iterdir()):
-        with tarfile.open(tmp / "results.tar", "w") as tf:
+        delivered = [child.name for child in results.iterdir() if child.is_dir()]
+        with tarfile.open(WORK / "results.tar", "w") as tf:
             for child in results.iterdir():
                 tf.add(child, arcname=child.name)
-        with open(tmp / "results.tar", "rb") as f:
+        with open(WORK / "results.tar", "rb") as f:
             pr = subprocess.run(SSH + [f"mkdir -p {REMOTE_RESULTS} && tar -C {REMOTE_RESULTS} -xf -"],
                                 stdin=f, capture_output=True, timeout=900)
             if pr.returncode != 0:
@@ -141,7 +172,10 @@ def main():
             subprocess.run(SSH + [
                 f"sed -i 's/\"status\": \"waiting_approval\"/\"status\": \"sent\"/' "
                 f"{REMOTE_JOBS}/{jid}/manifest.json"], capture_output=True, timeout=30)
-        print(f"готово: {len(manifests)} заданий, результаты у демона на хоумлабе")
+        # доставленное чистим, недоставленное (при сбоях) остаётся до следующего прогона
+        cleanup_after_delivery(results, delivered)
+        shutil.rmtree(jobs, ignore_errors=True)
+        print(f"готово: {len(delivered)} заданий, результаты у демона на хоумлабе")
     else:
         print("воркер не дал результатов — смотрите вывод выше")
     return 0
