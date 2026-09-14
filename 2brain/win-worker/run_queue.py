@@ -39,7 +39,7 @@ def main():
 
     # 1) забрать задания
     p = subprocess.run(SSH + [f"tar -C {REMOTE_JOBS} -cf - ."],
-                       capture_output=True, timeout=120)
+                       capture_output=True, timeout=900)
     if p.returncode != 0 or not p.stdout:
         print("очередь пуста или homelab недоступен")
         return 0
@@ -69,7 +69,7 @@ def main():
                 tf.add(child, arcname=child.name)
         with open(tmp / "results.tar", "rb") as f:
             pr = subprocess.run(SSH + [f"mkdir -p {REMOTE_RESULTS} && tar -C {REMOTE_RESULTS} -xf -"],
-                                stdin=f, capture_output=True, timeout=300)
+                                stdin=f, capture_output=True, timeout=900)
             if pr.returncode != 0:
                 print(pr.stderr.decode()[-300:], file=sys.stderr)
                 sys.exit("не удалось вернуть результаты")
