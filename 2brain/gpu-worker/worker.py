@@ -282,6 +282,14 @@ def main() -> int:
     ok = 0
     for mf in sorted(JOBS.glob("*/manifest.json")):
         m = json.loads(mf.read_text(encoding="utf-8"))
+        prev = RESULTS / m["id"] / "manifest.json"
+        if prev.exists():
+            try:
+                if json.loads(prev.read_text(encoding="utf-8")).get("status") == "done":
+                    print(f"[{m['id']}] skip: результат уже есть", flush=True)
+                    continue
+            except Exception:
+                pass
         try:
             print(f"[{m['id']}] start: {m['kind']} «{m.get('title', '')}»", flush=True)
             if m["kind"] == "stt":
