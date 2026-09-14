@@ -7,10 +7,13 @@ INBOX = VAULT / "Inbox.md"
 WATCHLIST = VAULT / "_Dashboards" / "Watchlist.md"
 TEMPLATE = VAULT / "_Templates" / "Заметка.md"
 RAW = VAULT / "_raw"
-ATTACH = VAULT / "_Attachments"
+ATTACH = VAULT / "_Attachments"   # только картинки-вложения (IG); полные тексты больше не сюда
 KNOWLEDGE = VAULT / "Knowledge"
+NORMS = VAULT / "Normatives"      # полные тексты нормативов (СП/ГОСТ/СНиП)
 PROJECTS = VAULT / "Projects"
-BOOKS = VAULT / "Books"          # каталог книг: заметки type: doc, полный текст во вложениях
+BOOKS = VAULT / "Books"           # полные тексты книг
+LLM = VAULT / "_llm"              # служебное для ИИ
+LLM_NOTES = LLM / "notes"         # заметки-материалы (frontmatter + Карта), все scope
 
 # --- Точка приёма ---
 DROP = VAULT / "_Drop"

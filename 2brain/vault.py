@@ -2,9 +2,11 @@
 
 Правила, которые соблюдает этот модуль:
 - Inbox.md — append-only: строки дописываются в конец и помечаются [x], не удаляются
-- frontmatter — 10 полей (v2: notebook_id выпилен), порядок сохранён
+- frontmatter — 12 полей (v2: + text, desc), порядок сохранён
+- заметки-материалы живут в _llm/notes/; полные тексты — в Books/, Normatives/,
+  Knowledge/, Projects/<имя>/ (путь в поле text)
 - имена файлов без запрещённых символов, дата только в captured
-- _raw/ — ГГГГ-ММ-ДД-<type>-<id>.<ext>, _Attachments/ — ГГГГ-ММ-ДД-<описание>.<ext>
+- _raw/ — ГГГГ-ММ-ДД-<type>-<id>.<ext>
 """
 import datetime
 import re
@@ -13,10 +15,11 @@ from pathlib import Path
 import config
 
 FORBIDDEN = re.compile(r'[\\/:*?"<>|]')
+NORMATIVE_RE = re.compile(r"^\s*(СП|ГОСТ(\s+Р)?|СНиП|СТО|ТУ|МДК|РД|ВСН|ПУЭ)\b")
 
 FRONTMATTER_FIELDS = [
     "title", "type", "scope", "status", "source_url", "captured",
-    "raw", "template_version", "tags", "related",
+    "raw", "text", "desc", "template_version", "tags", "related",
 ]
 
 
@@ -107,15 +110,36 @@ class Watchlist:
 
 
 def note_path(title: str, scope: str) -> Path:
-    """Путь заметки по доктрине: Knowledge/, Books/ или Projects/<имя>/; коллизии — суффикс."""
+    """Путь заметки: все заметки-материалы в _llm/notes/ (scope живёт во frontmatter);
+    коллизии — суффикс."""
+    config.LLM_NOTES.mkdir(parents=True, exist_ok=True)
+    base = sanitize(title)
+    p = config.LLM_NOTES / f"{base}.md"
+    n = 2
+    while p.exists():
+        p = config.LLM_NOTES / f"{base} ({n}).md"
+        n += 1
+    return p
+
+
+def fulltext_dir(scope: str, ntype: str, title: str) -> Path:
+    """Каталог полного текста: books -> Books/, проект -> Projects/<имя>/,
+    doc-норматив (СП/ГОСТ/СНиП/...) -> Normatives/, остальное -> Knowledge/."""
     if scope.startswith("project/"):
         d = config.PROJECTS / scope.split("/", 1)[1]
     elif scope == "books":
         d = config.BOOKS
+    elif ntype == "doc" and NORMATIVE_RE.match(title):
+        d = config.NORMS
     else:
         d = config.KNOWLEDGE
-        scope = "global"
     d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def fulltext_path(title: str, scope: str = "global", ntype: str = "doc") -> Path:
+    """Файл полного текста в тематической папке; коллизии — суффикс."""
+    d = fulltext_dir(scope, ntype, title)
     base = sanitize(title)
     p = d / f"{base}.md"
     n = 2
@@ -127,7 +151,7 @@ def note_path(title: str, scope: str) -> Path:
 
 def render_stub(title: str, ntype: str, scope: str, source_url: str,
                 captured: str, raw: str, tags: list[str]) -> str:
-    """Заметка-заглушка из полей доктрины (шаблон Заметка.md, поле notebook_id выпилено)."""
+    """Заметка-заглушка из полей доктрины (шаблон Заметка.md, версия 2)."""
     tags = list(dict.fromkeys([f"type/{ntype}"] + tags))  # type-тег первым, без дублей
     fm = [
         "---",
@@ -138,36 +162,47 @@ def render_stub(title: str, ntype: str, scope: str, source_url: str,
         f"source_url: \"{source_url}\"",
         f"captured: \"{captured}\"",
         f"raw: \"{raw}\"",
-        "template_version: 1",
+        "text: \"\"",
+        "desc: \"\"",
+        "template_version: 2",
         f"tags: [{', '.join(t for t in tags)}]",
         "related: []",
         "---",
         "",
         "## Карта",
         "",
-        "## Заметки",
-        "",
     ]
     return "\n".join(fm)
 
 
 def create_note(title: str, ntype: str, scope: str, source_url: str,
-                captured: str, raw: str, tags: list[str],
-                body_lead: str = "") -> Path:
+                captured: str, raw: str, tags: list[str]) -> Path:
     p = note_path(title, scope)
-    text = render_stub(title, ntype, scope, source_url, captured, raw, tags)
-    if body_lead:
-        # ссылка на полный текст (doc) или вложение — перед разделом Карта
-        text = text.replace("## Карта\n", f"{body_lead}\n\n## Карта\n", 1)
-    p.write_text(text, encoding="utf-8")
+    p.write_text(render_stub(title, ntype, scope, source_url, captured, raw, tags),
+                 encoding="utf-8")
     return p
+
+
+def fm_get(note: Path, key: str) -> str:
+    """Значение строкового поля frontmatter (пусто, если нет)."""
+    m = re.search(rf'^{key}: "([^"]*)"', note.read_text(encoding="utf-8"), flags=re.M)
+    return m.group(1) if m else ""
+
+
+def set_field(note: Path, key: str, value: str):
+    """Поменять одно поле frontmatter; отсутствующее — вставить перед template_version."""
+    text = note.read_text(encoding="utf-8")
+    if re.search(rf"^{key}: ", text, flags=re.M):
+        text = re.sub(rf"^{key}: .*", f'{key}: "{value}"', text, count=1, flags=re.M)
+    else:
+        text = re.sub(r"^template_version:", f'{key}: "{value}"\ntemplate_version:',
+                      text, count=1, flags=re.M)
+    note.write_text(text, encoding="utf-8")
 
 
 def set_status(note: Path, status: str):
     """Поменять только поле status в frontmatter, остальное не трогать."""
-    text = note.read_text(encoding="utf-8")
-    text = re.sub(r'(^status: )"([^"]*)"', rf'\1"{status}"', text, count=1, flags=re.M)
-    note.write_text(text, encoding="utf-8")
+    set_field(note, "status", status)
 
 
 def wiki_ref(note: Path) -> str:

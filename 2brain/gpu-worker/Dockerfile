@@ -8,7 +8,7 @@ ARG DEVICE=cpu
 
 WORKDIR /app
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends ffmpeg openssh-server \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
@@ -55,4 +55,11 @@ EOF
 # worker.py копируется ПОСЛЕДНИМ: правки воркера не инвалидируют тяжёлый слой с моделями
 COPY worker.py .
 
-ENTRYPOINT ["python3", "worker.py"]
+COPY ssh-entrypoint.sh /ssh-entrypoint.sh
+RUN chmod +x /ssh-entrypoint.sh && mkdir -p /run/sshd \
+    && echo "PermitRootLogin prohibit-password" >> /etc/ssh/sshd_config \
+    && echo "Port 22" >> /etc/ssh/sshd_config
+
+# vast.ai launch: контейнер ждёт в SSH-режиме, задания запускаем вручную
+ENTRYPOINT ["/ssh-entrypoint.sh"]
+CMD ["sleep", "infinity"]

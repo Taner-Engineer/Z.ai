@@ -123,12 +123,13 @@ def consume_url_lists(files: list[Path]) -> None:
             inbox.append_captures(items)
             log(f"Inbox += {len(items)} строк из {f.name}")
         else:
-            # это документ, а не список ссылок: полный текст во вложения
-            dest = vault.attach_name(f.stem)
+            # это документ, а не список ссылок: полный текст в тематическую папку
+            dest = vault.fulltext_path(f.stem)
             dest.write_text(text, encoding="utf-8")
             note = vault.create_note(title=f.stem, ntype="doc", scope="global",
                                      source_url="", captured=vault.today(),
                                      raw="", tags=[])
+            vault.set_field(note, "text", str(dest.relative_to(config.VAULT)))
             log(f"документ-заметка: {note.name}")
             STATS["done"] += 1
         _consume(f)
@@ -155,6 +156,8 @@ def handle_drop_file(p: Path) -> None:
         _handle_pdf(p, title_hint=p.stem, source_url="", scope=scope)
         return
     if ext in (".djvu", ".djv"):
+        if scope == "global":
+            scope = "books"  # DJVU без подпапки _Drop — по умолчанию книга
         has_text = router.djvu_has_text(p)
         log(f"DJVU {p.name}: OCR-слой: {has_text}")
         pdf = processors.djvu_to_pdf(p, has_text)
@@ -191,13 +194,11 @@ def _handle_pdf(p: Path, title_hint: str, source_url: str, scope: str = "global"
 
 def _finish_free_file(res: processors.Result, p: Path) -> None:
     """Файловый вход обработан: заметка + потребление исходника."""
-    lead = ""
-    if res.attach:
-        lead = f"Полный текст: [[{res.attach[:-3]}]]"
     note = vault.create_note(title=res.title or p.stem, ntype=res.ntype or "doc",
                              scope=res.scope or "global", source_url=res.source_url,
-                             captured=res.captured, raw=res.raw, tags=res.tags,
-                             body_lead=lead)
+                             captured=res.captured, raw=res.raw, tags=res.tags)
+    if res.attach and res.attach.lower().endswith(".md"):
+        vault.set_field(note, "text", res.attach)
     if not res.ok:
         vault.set_status(note, "queued")  # сырьё не готово — ZCode пропустит пустые
         log(f"ОШИБКА {p.name}: {res.error}")
@@ -398,20 +399,28 @@ def collect_gpu_results() -> None:
             continue
         note_rel = m.get("note")
         note = config.VAULT / note_rel if note_rel else None
+        has_note = bool(note) and note.exists()
+        scope = vault.fm_get(note, "scope") if has_note else "global"
+        ntype = vault.fm_get(note, "type") if has_note else "doc"
+        content = out.read_text(encoding="utf-8", errors="replace")
         if m["kind"] == "ocr":
-            dest = vault.attach_name(m.get("title") or out.stem)
-            dest.write_text(out.read_text(encoding="utf-8"), encoding="utf-8")
-            raw = ""
+            # полный текст сразу в тематическую папку (Books/Normatives/...)
+            dest = vault.fulltext_path(m.get("title") or out.stem, scope, ntype)
+            dest.write_text(content, encoding="utf-8")
+            if has_note:
+                vault.set_field(note, "text", str(dest.relative_to(config.VAULT)))
         else:
+            # stt/convert: транскрипт в _raw; для doc-конвертации — полный текст в папку
             dest = vault.raw_name("transcript", m["id"], "txt")
-            shutil_text = out.read_text(encoding="utf-8", errors="replace")
-            dest.write_text(shutil_text, encoding="utf-8")
-            raw = str(dest.relative_to(config.VAULT))
-        if note and note.exists():
-            text = note.read_text(encoding="utf-8")
-            if raw:
-                text = re.sub(r'(^raw: )"([^"]*)"', rf'\1"{raw}"', text, count=1, flags=re.M)
-            note.write_text(text, encoding="utf-8")
+            dest.write_text(content, encoding="utf-8")
+            if has_note:
+                vault.set_field(note, "raw", str(dest.relative_to(config.VAULT)))
+            if m["kind"] == "convert":
+                tdest = vault.fulltext_path(m.get("title") or out.stem, scope, ntype)
+                tdest.write_text(content, encoding="utf-8")
+                if has_note:
+                    vault.set_field(note, "text", str(tdest.relative_to(config.VAULT)))
+        if has_note:
             vault.set_status(note, "queued")
             log(f"GPU-результат {m['id']}: заметка {note.name} -> queued")
         jdir.rename(config.PROCESSED / jdir.name)

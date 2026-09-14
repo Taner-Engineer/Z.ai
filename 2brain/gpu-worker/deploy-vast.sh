@@ -48,25 +48,37 @@ tar -C "$HERE" -cf - Dockerfile requirements.txt worker.py \
     | $SSH "root@$IP" 'mkdir -p /root/gpu-worker && tar -C /root/gpu-worker -xf -'
 tar -C "$TMPJOBS" -cf - . | $SSH "root@$IP" 'mkdir -p /root/gpu-worker/jobs && tar -C /root/gpu-worker/jobs -xf -'
 
-# --- сборка (cuda) и прогон ---
-# IMAGE_REF='user/repo:tag' + DOCKERHUB_TOKEN: если образ уже в реестре — pull
-# вместо сборки (быстрый старт); после локальной сборки — push, чтобы следующие
-# запуски (в т.ч. на дорогих GPU) сборку не платили вовсе.
+# --- образ: три пути, по приоритету ---
+# 1) IMAGE_REF (Docker Hub): инстанс тянет за ~1-2 мин с CDN; vast.ai может
+#    стартовать инстанс сразу с этим образом — деплой без времени на образ.
+#    После локальной сборки: push-image-dockerhub.sh (один раз, аплинк).
+# 2) TARBALL_URL (VPS): docker load ~2-3 мин; tarball кладёт push-image-vps.sh.
+# 3) Сборка на инстансе (долго/дорого) — только как последний фолбэк.
 IMAGE_REF="${IMAGE_REF:-}"
-BUILD_CMD="docker build --build-arg DEVICE=cuda -t 2brain-worker ."
+TARBALL_URL="${TARBALL_URL:-}"
+GOT_IMAGE=0
 if [ -n "$IMAGE_REF" ]; then
     if [ -n "$DOCKERHUB_TOKEN" ]; then
         echo "$DOCKERHUB_TOKEN" | $SSH "root@$IP" "docker login -u ${IMAGE_REF%%/*} --password-stdin" || true
     fi
     if $SSH "root@$IP" "docker pull $IMAGE_REF"; then
         $SSH "root@$IP" "docker tag $IMAGE_REF 2brain-worker"
-        echo "== образ взят из реестра: $IMAGE_REF"
-    else
-        $SSH "root@$IP" "cd /root/gpu-worker && $BUILD_CMD && docker tag 2brain-worker $IMAGE_REF && docker push $IMAGE_REF" \
-            && echo "== образ собран и сохранён в реестр: $IMAGE_REF"
+        echo "== образ из Docker Hub: $IMAGE_REF"
+        GOT_IMAGE=1
     fi
-else
-    $SSH "root@$IP" "cd /root/gpu-worker && $BUILD_CMD"
+fi
+if [ "$GOT_IMAGE" = "0" ] && [ -n "$TARBALL_URL" ]; then
+    echo "== образ: docker load из $TARBALL_URL"
+    if $SSH "root@$IP" "curl -fsSL '$TARBALL_URL' | gzip -d | docker load"; then
+        LOADED=$(docker images --format '{{.Repository}}:{{.Tag}}' | head -1)
+        # имя образа после load определяется сохранённым тегом
+        $SSH "root@$IP" "docker images --format '{{.Repository}}:{{.Tag}}' | grep 2brain-worker | head -1 | xargs -I{} docker tag {} 2brain-worker" \
+            && GOT_IMAGE=1 && echo "== образ загружен из tarball"
+    fi
+fi
+if [ "$GOT_IMAGE" = "0" ]; then
+    echo "!! образ не получен (нет IMAGE_REF/TARBALL_URL) — сборка на инстансе (дольше, дороже)"
+    $SSH "root@$IP" "cd /root/gpu-worker && docker build --build-arg DEVICE=cuda -t 2brain-worker ."
 fi
 $SSH "root@$IP" 'docker run --rm --gpus all -v /root/gpu-worker:/work 2brain-worker'
 
