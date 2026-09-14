@@ -13,11 +13,22 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+
+# gpu_lock лежит уровнем выше; docker-образ и scp-деплой несут только worker.py,
+# там работаем без лока — как раньше
+_here = Path(__file__).resolve()
+if (_here.parent.parent / "gpu_lock.py").is_file():
+    sys.path.insert(0, str(_here.parent.parent))
+    import gpu_lock
+else:
+    gpu_lock = None
 
 WORK = Path(os.environ.get("WORK_DIR", "/work"))
 JOBS = WORK / "jobs"
 RESULTS = WORK / "results"
+LOCK_PATH = Path(tempfile.gettempdir()) / "2brain-gpu.lock"
 
 
 def has_cuda() -> bool:
@@ -272,6 +283,17 @@ def run_ocr(job_dir: Path, m: dict) -> str:
     return out.name
 
 
+def should_run(m: dict) -> bool:
+    """Терминальные статусы не перегоняем: sent уже отправлен, done/failed уже исполнены."""
+    return m.get("status") not in ("sent", "done", "failed")
+
+
+def is_done(job_id: str, results_dir: Path = RESULTS) -> bool:
+    """У задания уже есть результат (манифест в results) — не переделывать
+    независимо от статуса: перезапуск должен возобновляться, а не повторяться."""
+    return (results_dir / job_id / "manifest.json").exists()
+
+
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "--part":
         _convert_single(sys.argv[2], sys.argv[3], sys.argv[4] == "1")
@@ -279,39 +301,49 @@ def main() -> int:
     if not JOBS.exists():
         print("нет папки заданий /work/jobs", flush=True)
         return 1
-    ok = 0
-    for mf in sorted(JOBS.glob("*/manifest.json")):
-        m = json.loads(mf.read_text(encoding="utf-8"))
-        prev = RESULTS / m["id"] / "manifest.json"
-        if prev.exists():
+    # GPU-лок берёт только оркестратор; дети (--part) лок не берут — его уже
+    # держит родитель, повторный захват тем же процессом упал бы
+    gpu = None
+    if gpu_lock is not None:
+        gpu = gpu_lock.acquire(LOCK_PATH)
+        if gpu is None:
+            print("другой worker.py уже держит GPU — выход", flush=True)
+            return 0
+    try:
+        ok = 0
+        for mf in sorted(JOBS.glob("*/manifest.json")):
+            m = json.loads(mf.read_text(encoding="utf-8"))
+            if not should_run(m):
+                print(f"[{m['id']}] skip: статус «{m.get('status')}» — не перегоняем", flush=True)
+                continue
+            if is_done(m["id"]):
+                print(f"[{m['id']}] skip: результат уже есть", flush=True)
+                continue
             try:
-                if json.loads(prev.read_text(encoding="utf-8")).get("status") == "done":
-                    print(f"[{m['id']}] skip: результат уже есть", flush=True)
-                    continue
-            except Exception:
-                pass
-        try:
-            print(f"[{m['id']}] start: {m['kind']} «{m.get('title', '')}»", flush=True)
-            if m["kind"] == "stt":
-                output = run_stt(mf.parent, m)
-            else:  # ocr | convert
-                output = run_ocr(mf.parent, m)
-            m["status"] = "done"
-            m["output"] = output
-            (RESULTS / m["id"] / "manifest.json").parent.mkdir(parents=True, exist_ok=True)
-            (RESULTS / m["id"] / "manifest.json").write_text(
-                json.dumps(m, ensure_ascii=False, indent=1), encoding="utf-8")
-            ok += 1
-            print(f"[{m['id']}] done -> results/{m['id']}/{output}", flush=True)
-        except Exception as e:  # одно задание не роняет батч
-            m["status"] = "failed"
-            m["error"] = str(e)[:500]
-            (RESULTS / m["id"]).mkdir(parents=True, exist_ok=True)
-            (RESULTS / m["id"] / "manifest.json").write_text(
-                json.dumps(m, ensure_ascii=False, indent=1), encoding="utf-8")
-            print(f"[{m['id']}] FAILED: {e}", flush=True)
-    print(f"готово: {ok} успешно", flush=True)
-    return 0
+                print(f"[{m['id']}] start: {m['kind']} «{m.get('title', '')}»", flush=True)
+                if m["kind"] == "stt":
+                    output = run_stt(mf.parent, m)
+                else:  # ocr | convert
+                    output = run_ocr(mf.parent, m)
+                m["status"] = "done"
+                m["output"] = output
+                (RESULTS / m["id"] / "manifest.json").parent.mkdir(parents=True, exist_ok=True)
+                (RESULTS / m["id"] / "manifest.json").write_text(
+                    json.dumps(m, ensure_ascii=False, indent=1), encoding="utf-8")
+                ok += 1
+                print(f"[{m['id']}] done -> results/{m['id']}/{output}", flush=True)
+            except Exception as e:  # одно задание не роняет батч
+                m["status"] = "failed"
+                m["error"] = str(e)[:500]
+                (RESULTS / m["id"]).mkdir(parents=True, exist_ok=True)
+                (RESULTS / m["id"] / "manifest.json").write_text(
+                    json.dumps(m, ensure_ascii=False, indent=1), encoding="utf-8")
+                print(f"[{m['id']}] FAILED: {e}", flush=True)
+        print(f"готово: {ok} успешно", flush=True)
+        return 0
+    finally:
+        if gpu is not None:
+            gpu_lock.release(gpu)
 
 
 if __name__ == "__main__":

@@ -7,8 +7,11 @@ Homelab-демон подхватывает их следующим проход
 
 Запуск:  C:\\Users\\Us\\2brain-worker\\venv\\Scripts\\python run_queue.py
 """
+import argparse
 import json
 import os
+import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -30,7 +33,33 @@ def sh(cmd, **kw):
     return r
 
 
+def seed_results(src_dirs, results_dir) -> int:
+    """Подсадить готовые результаты (каталоги с manifest.json) в tmp results/.
+
+    Дедупликация по имени каталога (id задания): уже существующее не замещаем.
+    Возвращает, сколько подсажено.
+    """
+    n = 0
+    for src in src_dirs:
+        src = Path(src)
+        if not src.is_dir():
+            continue
+        for child in sorted(src.iterdir()):
+            if not child.is_dir() or not (child / "manifest.json").is_file():
+                continue
+            dst = results_dir / child.name
+            if dst.exists():
+                continue
+            shutil.copytree(child, dst)
+            n += 1
+    return n
+
+
 def main():
+    parser = argparse.ArgumentParser(description="Раннер очереди 2brain")
+    parser.add_argument("--seed-results", action="append", default=[], metavar="DIR",
+                        help="каталог готовых результатов для подсадки (можно повторять)")
+    opts = parser.parse_args()
     # защита от наложения запусков (планировщик + вручную)
     lock = open(HERE / "queue.lock", "w")
     try:
@@ -44,6 +73,7 @@ def main():
     tmp = Path(tempfile.mkdtemp(prefix="2brain-queue-"))
     jobs, results = tmp / "jobs", tmp / "results"
     jobs.mkdir(parents=True)
+    results.mkdir(parents=True)
 
     # 1) забрать задания
     p = subprocess.run(SSH + [f"tar -C {REMOTE_JOBS} -cf - ."],
@@ -64,10 +94,30 @@ def main():
         m = json.loads(mf.read_text(encoding="utf-8"))
         print(f"  - {m['id']}: {m['kind']} «{m['title']}»")
 
-    # 2) исполнить воркером локально
+    # 1.5) подсадить готовые результаты: воркер не переделает их (skip-if-done)
+    if opts.seed_results:
+        n = seed_results(opts.seed_results, results)
+        print(f"подсажено готовых результатов: {n}")
+
+    # 2) исполнить воркером локально; смерть раннера = смерть воркера,
+    # иначе остаётся GPU-процесс-сирота (инцидент 2026-09-14)
+    def _bail(sig, frame):
+        raise SystemExit(128 + sig)
+
+    for name in ("SIGINT", "SIGTERM", "SIGBREAK"):
+        s = getattr(signal, name, None)
+        if s is not None:
+            signal.signal(s, _bail)
+
     env = {**os.environ, "WORK_DIR": str(tmp)}
-    r = subprocess.run([str(VENV_PY), str(WORKER)], env=env)
-    if r.returncode != 0:
+    proc = subprocess.Popen([str(VENV_PY), str(WORKER)], env=env)
+    try:
+        rc = proc.wait()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    if rc != 0:
         sys.exit("воркер завершился с ошибкой")
 
     # 3) вернуть результаты на homelab

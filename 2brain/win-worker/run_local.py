@@ -206,6 +206,10 @@ def main() -> int:
     r = subprocess.run([str(VENV_PY), str(WORKER)], env=env)
     if r.returncode != 0:
         sys.exit("воркер завершился с ошибкой; исходники в " + str(ARCHIVE / today))
+    # воркер выходит с кодом 0 и без результатов, если GPU держит другой worker.py
+    if not any((work / "results").iterdir()):
+        print("GPU занят другим воркером — прогон отложен")
+        return 0
 
     # 6) результаты на homelab
     if any((work / "results").iterdir()):
