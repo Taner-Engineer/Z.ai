@@ -15,6 +15,7 @@ import signal
 import subprocess
 import sys
 import tarfile
+import time
 from pathlib import Path
 
 SSH = ["ssh", "-o", "ConnectTimeout=10", "root@192.168.2.9"]
