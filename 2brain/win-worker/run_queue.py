@@ -100,18 +100,52 @@ def main():
     jobs.mkdir(exist_ok=True)
     results.mkdir(exist_ok=True)
 
-    # 1) забрать задания
-    p = subprocess.run(SSH + [f"tar -C {REMOTE_JOBS} -cf - ."],
-                       capture_output=True, timeout=900)
+    # 0) застарелые tmp-каталоги прошлых прогонов — вон (источник «старого temp»)
+    import glob as _glob
+    for old in _glob.glob(str(Path(tempfile.gettempdir()) / "2brain-queue-*")):
+        try:
+            if time.time() - os.path.getmtime(old) > 3600:
+                shutil.rmtree(old, ignore_errors=True)
+                print(f"чистка старого temp: {os.path.basename(old)}")
+        except OSError:
+            pass
+
+    # 1) ПРЕДВАРИТЕЛЬНАЯ ПРОВЕРКА: есть ли смысл вообще подключаться.
+    # Считаем waiting_approval на стороне хоумлаба — без скачивания.
+    pc = subprocess.run(
+        SSH + [f"grep -l '\"status\": \"waiting_approval\"' {REMOTE_JOBS}/*/manifest.json 2>/dev/null | wc -l"],
+        capture_output=True, text=True, timeout=60)
+    try:
+        waiting = int((pc.stdout or "0").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        waiting = 0
+    if pc.returncode != 0:
+        print("homelab недоступен — пропуск прогона")
+        return 0
+    if waiting == 0:
+        print("очередь пуста (waiting_approval: 0) — качать нечего, выход")
+        return 0
+    print(f"заданий waiting_approval на homelab: {waiting} — качаю только их")
+
+    # 2) скачать ТОЛЬКО ожидающие задания: тар собирается на хоумлабе
+    # с фильтром по манифестам — история в jobs/ не передаётся никогда
+    remote_tar = (
+        f"cd {REMOTE_JOBS} && wait=''; "
+        "for mf in */manifest.json; do "
+        "grep -q '\"status\": \"waiting_approval\"' \"$mf\" 2>/dev/null && "
+        "wait=\"$wait ${mf%%/*}\"; done; "
+        "[ -n \"$wait\" ] && tar -cf - $wait"
+    )
+    p = subprocess.run(SSH + [remote_tar], capture_output=True, timeout=1800)
     if p.returncode != 0 or not p.stdout:
-        print("очередь пуста или homelab недоступен")
+        print("тар пуст (задания разобрали между проверкой и скачиванием)")
         return 0
     with open(WORK / "jobs.tar", "wb") as f:
         f.write(p.stdout)
     with tarfile.open(WORK / "jobs.tar") as tf:
         tf.extractall(jobs)
 
-    # 1.2) уже доставленные прошлым прогоном задания не запускаем повторно
+    # 2.2) страховка: доставленные ранее не запускаем повторно
     dropped = drop_sent_jobs(jobs)
     if dropped:
         print(f"пропущено доставленных ранее: {dropped}")
