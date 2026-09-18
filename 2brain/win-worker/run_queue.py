@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 
 SSH = ["ssh", "-o", "ConnectTimeout=10", "root@192.168.2.9"]
+WINNO = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0  # без консольных окон у детей
 REMOTE_JOBS = "/srv/2brain/_Drop/_needs-gpu/jobs"
 REMOTE_RESULTS = "/srv/2brain/_Drop/_results"
 HERE = Path(__file__).parent
@@ -117,8 +118,9 @@ def main():
     # 1) ПРЕДВАРИТЕЛЬНАЯ ПРОВЕРКА: есть ли смысл вообще подключаться.
     # Считаем waiting_approval на стороне хоумлаба — без скачивания.
     pc = subprocess.run(
-        SSH + [f"grep -l '\"status\": \"waiting_approval\"' {REMOTE_JOBS}/*/manifest.json 2>/dev/null | wc -l"],
-        capture_output=True, text=True, timeout=60)
+        SSH + ["grep -rl waiting_approval " + REMOTE_JOBS + "/*/*/manifest.json | wc -l"],
+        capture_output=True, text=True, timeout=60,
+        stdin=subprocess.DEVNULL, creationflags=WINNO)
     try:
         waiting = int((pc.stdout or "0").strip().splitlines()[-1])
     except (ValueError, IndexError):
@@ -140,7 +142,8 @@ def main():
         "wait=\"$wait ${mf%%/*}\"; done; "
         "[ -n \"$wait\" ] && tar -cf - $wait"
     )
-    p = subprocess.run(SSH + [remote_tar], capture_output=True, timeout=1800)
+    p = subprocess.run(SSH + [remote_tar], capture_output=True, timeout=1800,
+                       stdin=subprocess.DEVNULL, creationflags=WINNO)
     if p.returncode != 0 or not p.stdout:
         print("тар пуст (задания разобрали между проверкой и скачиванием)")
         return 0
