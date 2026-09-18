@@ -88,9 +88,11 @@ def main():
                         help="каталог готовых результатов для подсадки (можно повторять)")
     opts = parser.parse_args()
     # защита от наложения запусков (планировщик + вручную)
-    lock = open(HERE / "queue.lock", "w")
+    # "a+" без усечения: "w" обнуляет файл, и блокировка за EOF проходит у обоих
+    lock = open(HERE / "queue.lock", "a+")
     try:
         import msvcrt
+        lock.seek(0)
         msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
     except OSError:
         print("другой экземпляр раннера уже работает — выход")
