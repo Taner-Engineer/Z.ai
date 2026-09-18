@@ -15,6 +15,7 @@ import signal
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 from pathlib import Path
 
