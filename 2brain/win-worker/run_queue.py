@@ -115,41 +115,27 @@ def main():
         except OSError:
             pass
 
-    # 1) ПРЕДВАРИТЕЛЬНАЯ ПРОВЕРКА: есть ли смысл вообще подключаться.
-    # Считаем waiting_approval на стороне хоумлаба — без скачивания.
-    pc = subprocess.run(
-        SSH + ["grep -rl waiting_approval " + REMOTE_JOBS + "/*/*/manifest.json | wc -l"],
-        capture_output=True, text=True, timeout=60,
-        stdin=subprocess.DEVNULL, creationflags=WINNO)
-    try:
-        waiting = int((pc.stdout or "0").strip().splitlines()[-1])
-    except (ValueError, IndexError):
-        waiting = 0
-    if pc.returncode != 0:
-        print("homelab недоступен — пропуск прогона")
-        return 0
-    if waiting == 0:
-        print("очередь пуста (waiting_approval: 0) — качать нечего, выход")
-        return 0
-    print(f"заданий waiting_approval на homelab: {waiting} — качаю только их")
-
-    # 2) скачать ТОЛЬКО ожидающие задания: тар собирается на хоумлабе
-    # с фильтром по манифестам — история в jobs/ не передаётся никогда
-    remote_tar = (
-        f"cd {REMOTE_JOBS} && wait=''; "
-        "for mf in */manifest.json; do "
-        "grep -q '\"status\": \"waiting_approval\"' \"$mf\" 2>/dev/null && "
-        "wait=\"$wait ${mf%%/*}\"; done; "
-        "[ -n \"$wait\" ] && tar -cf - $wait"
-    )
-    p = subprocess.run(SSH + [remote_tar], capture_output=True, timeout=1800,
-                       stdin=subprocess.DEVNULL, creationflags=WINNO)
-    if p.returncode != 0 or not p.stdout:
-        print("тар пуст (задания разобрали между проверкой и скачиванием)")
-        return 0
-    with open(WORK / "jobs.tar", "wb") as f:
-        f.write(p.stdout)
-    with tarfile.open(WORK / "jobs.tar") as tf:
+    # 1) задания приходят ЛОКАЛЬНО: хоумлаб собирает queue.tar прямо в хранилище
+    # (_Drop/_needs-gpu/queue.tar + .size), Syncthing доставляет на этот ПК.
+    # Никаких ssh-потоков для данных (ssh под pythonw зависал на stdin).
+    NEEDS = Path(r"C:\Users\Us\Vaults\2brain\_Drop\_needs-gpu")
+    size_f, tar_f = NEEDS / "queue.tar.size", NEEDS / "queue.tar"
+    deadline = time.time() + 1500
+    while True:
+        try:
+            want = int(size_f.read_text())
+            have = tar_f.stat().st_size if tar_f.exists() else -1
+            age = time.time() - tar_f.stat().st_mtime if tar_f.exists() else 1e9
+        except (OSError, ValueError):
+            want, have = -1, -2
+        if want > 0 and have == want and age > 45:
+            break  # файл долился и лежит стабильные 45+ секунд
+        if time.time() > deadline:
+            print("queue.tar ещё синхронизируется — выход, retry следующим прогоном")
+            return 0
+        time.sleep(30)
+    print(f"queue.tar готов локально ({want} байт) — распаковываю")
+    with tarfile.open(tar_f) as tf:
         tf.extractall(jobs)
 
     # 2.2) страховка: доставленные ранее не запускаем повторно
